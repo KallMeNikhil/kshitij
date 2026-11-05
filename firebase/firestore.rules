@@ -73,9 +73,9 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
-    function fixtureImmutableFieldsUntouched() {
-      return !changed().hasAny(['fixtureId', 'competitionId', 'matchConfigurationSnapshot'])
-        && (!changed().hasAny(['sportId']) || !('sportId' in resource.data));
+    function fixtureImmutableFieldsUntouched(keys) {
+      return !keys.hasAny(['fixtureId', 'competitionId', 'matchConfigurationSnapshot'])
+        && (!keys.hasAny(['sportId']) || !('sportId' in resource.data));
     }
 
     function fixtureIsGenerationScaffolding() {
@@ -102,9 +102,9 @@ service cloud.firestore {
         && request.resource.data.get('statusReason', '').size() <= 300;
     }
 
-    function lifecycleChangeIsCoherent() {
+    function lifecycleChangeIsCoherent(keys) {
       return request.resource.data.status == resource.data.status
-        ? !changed().hasAny(['statusReason', 'resumeStatus'])
+        ? !keys.hasAny(['statusReason', 'resumeStatus'])
         : (request.resource.data.status == 'POSTPONED'
             ? lifecycleReasonIsValid() && request.resource.data.get('resumeStatus', '') == resource.data.status
             : (request.resource.data.status == 'CANCELLED'
@@ -115,7 +115,7 @@ service cloud.firestore {
                         || request.resource.data.status == resource.data.get('resumeStatus', 'SCHEDULED'))
                       && !('statusReason' in request.resource.data)
                       && !('resumeStatus' in request.resource.data)
-                    : !changed().hasAny(['statusReason', 'resumeStatus']))));
+                    : !keys.hasAny(['statusReason', 'resumeStatus']))));
     }
 
     function feederId(side) {
@@ -133,9 +133,9 @@ service cloud.firestore {
               : get(/databases/$(database)/documents/fixtures/$(feederId(side))).data.slotB);
     }
 
-    function coordinatorSlotsAreLegal() {
-      return (!changed().hasAny(['slotA']) || (request.resource.data.round > 1 && slotIsFeederWinner('A')))
-        && (!changed().hasAny(['slotB']) || (request.resource.data.round > 1 && slotIsFeederWinner('B')));
+    function coordinatorSlotsAreLegal(keys) {
+      return (!keys.hasAny(['slotA']) || (request.resource.data.round > 1 && slotIsFeederWinner('A')))
+        && (!keys.hasAny(['slotB']) || (request.resource.data.round > 1 && slotIsFeederWinner('B')));
     }
 
     function coordinatorResultIsRecorded(fid) {
@@ -149,14 +149,25 @@ service cloud.firestore {
             || (resource.data.status in ['LIVE', 'SCHEDULED', 'POSTPONED'] && coordinatorResultIsRecorded(resource.data.fixtureId)));
     }
 
-    function coordinatorFixtureUpdateIsLegal() {
-      return changed().hasOnly(['status', 'statusReason', 'resumeStatus', 'slotA', 'slotB', 'scheduledDate', 'scheduledTime', 'venue', 'displaySummary'])
+    function coordinatorFixtureUpdateIsLegal(keys) {
+      return keys.hasOnly(['status', 'statusReason', 'resumeStatus', 'slotA', 'slotB', 'scheduledDate', 'scheduledTime', 'venue', 'displaySummary'])
         && (resource.data.status in ['DRAFT', 'SCHEDULED']
-            || (resource.data.status == 'LIVE' && changed().hasOnly(['status', 'statusReason', 'resumeStatus']))
-            || (resource.data.status == 'POSTPONED' && changed().hasOnly(['status', 'statusReason', 'resumeStatus', 'scheduledDate', 'scheduledTime', 'venue'])))
+            || (resource.data.status == 'LIVE' && keys.hasOnly(['status', 'statusReason', 'resumeStatus']))
+            || (resource.data.status == 'POSTPONED' && keys.hasOnly(['status', 'statusReason', 'resumeStatus', 'scheduledDate', 'scheduledTime', 'venue'])))
         && !(resource.data.status == 'DRAFT' && request.resource.data.status == 'SCHEDULED')
-        && coordinatorSlotsAreLegal()
+        && coordinatorSlotsAreLegal(keys)
         && coordinatorStatusChangeIsAllowed();
+    }
+
+    function fixtureUpdateIsLegal(keys) {
+      return (isSuperAdmin() && fixtureIsGenerationScaffolding()
+            && !(request.resource.data.status in ['POSTPONED', 'CANCELLED']))
+        || (fixtureImmutableFieldsUntouched(keys)
+            && fixtureStatusChangeIsLegal()
+            && lifecycleChangeIsCoherent(keys)
+            && (!keys.hasAny(['slotA', 'slotB']) || resource.data.status in ['DRAFT', 'SCHEDULED'])
+            && (isSuperAdmin()
+                || (isSportCoordinatorFor(resource.data.sportId) && coordinatorFixtureUpdateIsLegal(keys))));
     }
 
     match /fixtures/{fixtureId} {
@@ -164,15 +175,7 @@ service cloud.firestore {
       allow create: if isSuperAdmin();
 
       allow delete: if isSuperAdmin() && fixtureIsGenerationScaffolding();
-      allow update: if (isSuperAdmin() && fixtureIsGenerationScaffolding()
-            && !(request.resource.data.status in ['POSTPONED', 'CANCELLED']))
-        || (fixtureImmutableFieldsUntouched()
-            && fixtureStatusChangeIsLegal()
-            && lifecycleChangeIsCoherent()
-
-            && (!changed().hasAny(['slotA', 'slotB']) || resource.data.status in ['DRAFT', 'SCHEDULED'])
-            && (isSuperAdmin()
-                || (isSportCoordinatorFor(resource.data.sportId) && coordinatorFixtureUpdateIsLegal())));
+      allow update: if fixtureUpdateIsLegal(request.resource.data.diff(resource.data).affectedKeys());
     }
 
     function fixtureOf(fixtureId) {

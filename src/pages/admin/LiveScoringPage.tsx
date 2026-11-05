@@ -6,7 +6,7 @@ import { useResolvedSlot } from "../../hooks/useEntity";
 import { useAdminScope } from "../../lib/useAdminScope";
 import { tryResolveScoringModel } from "../../../shared/scoring/registry";
 import { startMatch, completeMatch, correctResult, postponeFixture, resumeFixture, cancelFixture, reopenMatch, reinstateFixture } from "../../lib/callables";
-import { COORDINATOR_RESULT_TYPES, RESULT_TYPES, RESULT_TYPE_LABELS, isEarlyEnd, resultLabel, resultTypeAllowedFrom, type ResultType } from "../../../shared/results";
+import { COORDINATOR_RESULT_TYPES, RESULT_TYPES, RESULT_TYPE_NAMES, isEarlyEnd, resultLabel, resultTypeAllowedFrom, type ResultType } from "../../../shared/results";
 import { describeFormat } from "../../../shared/scoring/describeFormat";
 import { availableLifecycleActions, LIFECYCLE_COPY, REASON_MAX_LENGTH, type LifecycleAction } from "../../../shared/fixtureLifecycle";
 import { checkScheduleDraft } from "../../../shared/schedule";
@@ -146,7 +146,7 @@ export function LiveScoringPage() {
   const runEarly = async () => {
     if (!earlyType || !earlyWinner) return;
     await completeMatch({ fixtureId, winnerSlot: earlyWinner, decidedBy: earlyType, resultSummary: "", reason: earlyReason.trim() });
-    succeed(`${RESULT_TYPE_LABELS[earlyType]} recorded. ${winnerLabel(earlyWinner)} advances.`);
+    succeed(`${RESULT_TYPE_NAMES[earlyType].replace(/ \(.*\)/, "")} recorded. ${winnerLabel(earlyWinner)} advances.`);
   };
 
   const runReopen = async () => {
@@ -338,7 +338,7 @@ export function LiveScoringPage() {
             <div className="admin-card">
               <h2 className="admin-card__title">End match early</h2>
               <p className="admin-hint">
-                For a match that can't finish normally: {earlyTypes.map((t) => RESULT_TYPE_LABELS[t].toLowerCase()).join(", ")}. Choose who advances and give a reason.
+                For a match that can't finish normally: {earlyTypes.map((t) => RESULT_TYPE_NAMES[t].toLowerCase()).join(", ")}. Choose who advances and give a reason.
               </p>
               <button type="button" className="admin-btn" onClick={openEarly}>
                 End match early
@@ -428,7 +428,7 @@ export function LiveScoringPage() {
               <select className="admin-input" value={earlyType ?? ""} onChange={(e) => setEarlyType(e.target.value as ResultType)}>
                 {earlyTypes.map((t) => (
                   <option key={t} value={t}>
-                    {RESULT_TYPE_LABELS[t]}
+                    {RESULT_TYPE_NAMES[t]}
                   </option>
                 ))}
               </select>

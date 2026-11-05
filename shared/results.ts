@@ -25,6 +25,14 @@ export const RESULT_TYPE_LABELS: Record<ResultType | (typeof LEGACY_RESULT_TYPES
   ADMIN_OVERRIDE: "Decided by organisers",
 };
 
+export const RESULT_TYPE_NAMES: Record<ResultType, string> = {
+  WALKOVER: "Walkover (no-show)",
+  RETIRED: "Retired (injury)",
+  DISQUALIFIED: "Disqualified",
+  ABANDONED: "Abandoned",
+  ADMIN_DECISION: "Organisers' decision",
+};
+
 export function isResultType(value: string): value is ResultType {
   return (RESULT_TYPES as readonly string[]).includes(value);
 }

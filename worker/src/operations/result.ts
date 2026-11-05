@@ -79,6 +79,10 @@ export async function completeMatch(ctx: AuthContext, input: unknown) {
     }
 
     const allFixtures = await loadCompetitionFixtures(ctx.db, fixture.competitionId, transaction);
+    const nextFixture = fixture.nextFixtureId ? allFixtures.find((f) => f.fixtureId === fixture.nextFixtureId) : undefined;
+    if (nextFixture && !isGenerationOnlyFixture(nextFixture) && nextFixture.status !== "SCHEDULED") {
+      throw new AppError(409, "NEXT_FIXTURE_NOT_OPEN", `The next-round match is already ${nextFixture.status.toLowerCase()}, so a winner cannot be added to it`);
+    }
     const before = snapshotFixtures(allFixtures);
     const updated = propagateWinner(allFixtures, fixtureId, winnerSlot);
     const source = updated.find((f) => f.fixtureId === fixtureId);

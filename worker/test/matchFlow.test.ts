@@ -94,3 +94,14 @@ describe("reinstating a cancelled match", () => {
     await expect(reinstateFixture(ctxFor(db), { fixtureId: FID, reason: "x" })).rejects.toMatchObject({ code: "INVALID_FIXTURE_TRANSITION" });
   });
 });
+
+describe("completion into a next match that is no longer open", () => {
+  it("refuses with a clear error instead of a permission failure", async () => {
+    const { completeMatch } = await import("../src/operations/result");
+    const done = fixture({ fixtureId: NEXT, round: 2, matchNumber: 1, status: "COMPLETED", slotA: { kind: "FIXTURE_WINNER", fromFixtureId: FID }, slotB: { kind: "FIXTURE_WINNER", fromFixtureId: "basketball-mens-r1-m02" } });
+    const db = dbWith({ fixtures: [fixture({ nextFixtureId: NEXT, nextSlot: "A" }), done] });
+    await expect(completeMatch(ctxFor(db), { fixtureId: FID, winnerSlot: "A", decidedBy: "WALKOVER", resultSummary: "", reason: "no show" })).rejects.toMatchObject({
+      code: "NEXT_FIXTURE_NOT_OPEN",
+    });
+  });
+});
