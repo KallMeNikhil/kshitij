@@ -143,7 +143,9 @@ describe("round-specific configuration (table tennis best-of-5 for semifinal/fin
     const bestOfThree = { ...tt, roundOverrides: undefined };
     const early = crossCheckWinner("SETS_POINTS", "SETS_POINTS", "table-tennis", bestOfThree, twoZeroA, "B");
     expect(early.ok).toBe(false);
-    const asFinal = crossCheckWinner("SETS_POINTS", "SETS_POINTS", "table-tennis", final.matchConfigurationSnapshot, twoZeroA, "B");
-    expect(asFinal.ok).toBe(true);
+    const asFinal = crossCheckWinner("SETS_POINTS", "SETS_POINTS", "table-tennis", final.matchConfigurationSnapshot, twoZeroA, "A");
+    expect(asFinal.ok).toBe(false);
+    const threeZeroA = { sets: [...twoZeroA.sets, { a: 11, b: 9, completed: true }], currentSet: 2 };
+    expect(crossCheckWinner("SETS_POINTS", "SETS_POINTS", "table-tennis", final.matchConfigurationSnapshot, threeZeroA, "A").ok).toBe(true);
   });
 });

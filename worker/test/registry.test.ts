@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveOperation, operations } from "../src/operations/registry";
 
 describe("operation registry", () => {
-  it("exposes exactly the 36 canonical operations", () => {
-    expect(operations.size).toBe(36);
+  it("exposes exactly the 39 canonical operations", () => {
+    expect(operations.size).toBe(39);
     expect([...operations.keys()]).toEqual(
       expect.arrayContaining([
         "previewImport",

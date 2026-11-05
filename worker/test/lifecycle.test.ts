@@ -100,6 +100,13 @@ const final = () =>
     slotB: { kind: "FIXTURE_WINNER", fromFixtureId: "basketball-mens-r1-m02" },
   });
 
+const finished = (winner: "A" | "B") => ({
+  fixtureId: "x",
+  scoringModel: "BASKETBALL_POINTS",
+  version: 2,
+  data: winner === "A" ? { scoreA: 50, scoreB: 40, period: 4, overtime: false, ended: true } : { scoreA: 40, scoreB: 50, period: 4, overtime: false, ended: true },
+});
+
 describe("completeMatch integrity", () => {
   it("blocks duplicate completion and completing a non-live fixture", async () => {
     const db = dbWith({ fixtures: [liveR1(1, { status: "COMPLETED" })] });
@@ -125,19 +132,22 @@ describe("completeMatch integrity", () => {
     expect(db.commit).not.toHaveBeenCalled();
   });
 
-  it("restricts WALKOVER / ADMIN_OVERRIDE to Super Admin and requires an explanation", async () => {
+  it("lets coordinators record walkovers and retirements only, and every early end needs a reason", async () => {
     const db = dbWith({ fixtures: [liveR1(1)] });
-    const base = { fixtureId: "basketball-mens-r1-m01", winnerSlot: "A", decidedBy: "WALKOVER", resultSummary: "no-show" };
+    const base = { fixtureId: "basketball-mens-r1-m01", winnerSlot: "A", decidedBy: "ADMIN_DECISION", resultSummary: "", reason: "coin toss" };
     await expect(completeMatch(coordinator(db), base)).rejects.toMatchObject({ code: "SUPER_ADMIN_REQUIRED" });
-    await expect(completeMatch(ctxFor(db), { ...base, resultSummary: "  " })).rejects.toMatchObject({ code: "OVERRIDE_REASON_REQUIRED" });
-    await completeMatch(ctxFor(db), base);
-    const audit = db.commit.mock.calls[0][1].at(-1).data;
-    expect(audit).toMatchObject({ action: "completeMatch", actorRole: "SUPER_ADMIN", after: { override: true, decidedBy: "WALKOVER" } });
+    await expect(completeMatch(coordinator(db), { ...base, decidedBy: "DISQUALIFIED" })).rejects.toMatchObject({ code: "SUPER_ADMIN_REQUIRED" });
+    await expect(completeMatch(ctxFor(db), { ...base, reason: "  " })).rejects.toMatchObject({ code: "REASON_REQUIRED" });
+    await completeMatch(coordinator(db), { ...base, decidedBy: "RETIRED", reason: "ankle injury" });
+    const writes = db.commit.mock.calls[0][1];
+    const ms = writes.find((w: { collection: string }) => w.collection === "matchStates");
+    expect(ms.data.result).toEqual({ winnerSlot: "A", decidedBy: "RETIRED", summary: "Opponent retired", reason: "ankle injury" });
+    expect(writes.at(-1).data).toMatchObject({ action: "completeMatch", actorRole: "SPORT_COORDINATOR", reason: "ankle injury", after: { earlyEnd: true, decidedBy: "RETIRED" } });
   });
 
   it("propagates the winner into slotA of the next round and touches nothing else", async () => {
     const history = liveR1(2, { status: "COMPLETED" });
-    const db = dbWith({ fixtures: [liveR1(1), history, final()] });
+    const db = dbWith({ fixtures: [liveR1(1), history, final()], docs: { "matchStates/basketball-mens-r1-m01": finished("B") } });
     await completeMatch(coordinator(db), { fixtureId: "basketball-mens-r1-m01", winnerSlot: "B", decidedBy: "BASKETBALL_POINTS", resultSummary: "x" });
     const writes = db.commit.mock.calls[0][1];
     const ids = writes.map((w: { id: string }) => w.id);
@@ -150,7 +160,7 @@ describe("completeMatch integrity", () => {
   });
 
   it("propagates the winner into slotB of the next round", async () => {
-    const db = dbWith({ fixtures: [liveR1(1, { status: "COMPLETED" }), liveR1(2), final()] });
+    const db = dbWith({ fixtures: [liveR1(1, { status: "COMPLETED" }), liveR1(2), final()], docs: { "matchStates/basketball-mens-r1-m02": finished("A") } });
     await completeMatch(coordinator(db), { fixtureId: "basketball-mens-r1-m02", winnerSlot: "A", decidedBy: "BASKETBALL_POINTS", resultSummary: "x" });
     const next = db.commit.mock.calls[0][1].find((w: { id: string }) => w.id === "basketball-mens-r2-m01");
     expect(next.mergeFields).toEqual(["slotB"]);
@@ -181,7 +191,8 @@ describe("correctResult authorization and integrity", () => {
     const writes = db.commit.mock.calls[0][1];
     const ms = writes.find((w: { collection: string }) => w.collection === "matchStates");
     expect(ms.data.version).toBe(5);
-    expect(ms.mergeFields).toEqual(["version", "result.winnerSlot"]);
+    expect(ms.mergeFields).toEqual(["fixtureId", "version", "result"]);
+    expect(ms.data.result).toEqual({ winnerSlot: "B", decidedBy: "ADMIN_DECISION", summary: "Decided by organisers", reason: "scorer typo" });
     expect(writes.at(-1).data).toMatchObject({ action: "correctResult", reason: "scorer typo", actorRole: "SUPER_ADMIN", before: { winnerSlot: "A" }, after: { winnerSlot: "B" } });
   });
 

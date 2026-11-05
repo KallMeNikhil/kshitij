@@ -16,6 +16,7 @@ export interface BasketballState {
   period: number;
   overtime: boolean;
   periodEnds?: PeriodEnd[];
+  ended?: boolean;
 }
 
 export function emptyBasketballState(): BasketballState {
@@ -23,24 +24,28 @@ export function emptyBasketballState(): BasketballState {
 }
 
 export function addPoints(state: BasketballState, side: "A" | "B", points: 1 | 2 | 3): BasketballState {
+  if (state.ended) return state;
   return side === "A"
     ? { ...state, scoreA: state.scoreA + points }
     : { ...state, scoreB: state.scoreB + points };
 }
 
 export function correctPoints(state: BasketballState, side: "A" | "B", delta: number): BasketballState {
+  if (state.ended) return state;
   return side === "A"
     ? { ...state, scoreA: Math.max(0, state.scoreA + delta) }
     : { ...state, scoreB: Math.max(0, state.scoreB + delta) };
 }
 
 export function advancePeriod(state: BasketballState, config: BasketballConfig): BasketballState {
+  if (state.ended) return state;
   const next = state.period + 1;
   const ends = [...(state.periodEnds ?? []).slice(0, state.period - 1), { a: state.scoreA, b: state.scoreB }];
   return { ...state, period: next, overtime: next > config.quarters, periodEnds: ends };
 }
 
 export function setPeriod(state: BasketballState, period: number, config: BasketballConfig): BasketballState {
+  if (state.ended) return state;
   const target = Math.max(1, Math.min(period, state.period + 1));
   if (target === state.period) return state;
   if (target > state.period) return advancePeriod(state, config);
@@ -71,4 +76,19 @@ export function periodScores(state: BasketballState): { period: number; a: numbe
 export function decideWinner(state: BasketballState): "A" | "B" | null {
   if (state.scoreA === state.scoreB) return null;
   return state.scoreA > state.scoreB ? "A" : "B";
+}
+
+export function canEndMatch(state: BasketballState, config: BasketballConfig): boolean {
+  return !state.ended && state.period >= config.quarters && state.scoreA !== state.scoreB;
+}
+
+export function endMatch(state: BasketballState, config: BasketballConfig): BasketballState {
+  if (!canEndMatch(state, config)) return state;
+  const ends = [...(state.periodEnds ?? []).slice(0, state.period - 1), { a: state.scoreA, b: state.scoreB }];
+  return { ...state, periodEnds: ends, ended: true };
+}
+
+export function resumeMatch(state: BasketballState): BasketballState {
+  if (!state.ended) return state;
+  return { ...state, ended: false, periodEnds: (state.periodEnds ?? []).slice(0, state.period - 1) };
 }

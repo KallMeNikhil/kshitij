@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { LEGAL_STATUS_TRANSITIONS, availableLifecycleActions, isLegalStatusTransition, resolveLifecycle } from "./fixtureLifecycle";
+import { LEGAL_STATUS_TRANSITIONS, SUPER_ADMIN_ONLY_TRANSITIONS, availableLifecycleActions, isLegalStatusTransition, resolveLifecycle } from "./fixtureLifecycle";
 import type { FixtureStatus, Slot } from "./types";
 
 const STATUSES: FixtureStatus[] = ["DRAFT", "SCHEDULED", "LIVE", "COMPLETED", "POSTPONED", "CANCELLED"];
 const slot = (kind: Slot["kind"]): Slot => ({ kind });
 
 describe("legal status transitions", () => {
-  it("never leaves COMPLETED or CANCELLED", () => {
+  it("only leaves COMPLETED by reopening to LIVE and CANCELLED by reinstating to SCHEDULED", () => {
     for (const to of STATUSES) {
-      if (to !== "COMPLETED") expect(isLegalStatusTransition("COMPLETED", to)).toBe(false);
-      if (to !== "CANCELLED") expect(isLegalStatusTransition("CANCELLED", to)).toBe(false);
+      if (to !== "COMPLETED" && to !== "LIVE") expect(isLegalStatusTransition("COMPLETED", to)).toBe(false);
+      if (to !== "CANCELLED" && to !== "SCHEDULED") expect(isLegalStatusTransition("CANCELLED", to)).toBe(false);
     }
+    expect(SUPER_ADMIN_ONLY_TRANSITIONS).toEqual([["COMPLETED", "LIVE"], ["CANCELLED", "SCHEDULED"]]);
   });
 
   it("rules out the nonsensical moves", () => {
@@ -18,7 +19,6 @@ describe("legal status transitions", () => {
     expect(isLegalStatusTransition("COMPLETED", "SCHEDULED")).toBe(false);
     expect(isLegalStatusTransition("CANCELLED", "LIVE")).toBe(false);
     expect(isLegalStatusTransition("DRAFT", "POSTPONED")).toBe(false);
-    expect(isLegalStatusTransition("POSTPONED", "COMPLETED")).toBe(false);
     expect(isLegalStatusTransition("LIVE", "SCHEDULED")).toBe(false);
   });
 
@@ -28,6 +28,7 @@ describe("legal status transitions", () => {
     expect(isLegalStatusTransition("POSTPONED", "SCHEDULED")).toBe(true);
     expect(isLegalStatusTransition("POSTPONED", "LIVE")).toBe(true);
     expect(isLegalStatusTransition("POSTPONED", "CANCELLED")).toBe(true);
+    expect(isLegalStatusTransition("POSTPONED", "COMPLETED")).toBe(true);
     expect(LEGAL_STATUS_TRANSITIONS.SCHEDULED).toContain("CANCELLED");
   });
 });

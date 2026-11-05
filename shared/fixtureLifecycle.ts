@@ -6,10 +6,15 @@ export const LEGAL_STATUS_TRANSITIONS: Readonly<Record<FixtureStatus, readonly F
   DRAFT: ["SCHEDULED", "COMPLETED"],
   SCHEDULED: ["LIVE", "COMPLETED", "POSTPONED", "CANCELLED"],
   LIVE: ["COMPLETED", "POSTPONED", "CANCELLED"],
-  POSTPONED: ["SCHEDULED", "LIVE", "CANCELLED"],
-  COMPLETED: [],
-  CANCELLED: [],
+  POSTPONED: ["SCHEDULED", "LIVE", "COMPLETED", "CANCELLED"],
+  COMPLETED: ["LIVE"],
+  CANCELLED: ["SCHEDULED"],
 };
+
+export const SUPER_ADMIN_ONLY_TRANSITIONS: ReadonlyArray<readonly [FixtureStatus, FixtureStatus]> = [
+  ["COMPLETED", "LIVE"],
+  ["CANCELLED", "SCHEDULED"],
+];
 
 export const REASON_MAX_LENGTH = 300;
 

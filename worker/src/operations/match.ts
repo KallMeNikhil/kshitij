@@ -6,7 +6,9 @@ import { validateLiveState } from "../../../shared/scoring/stateSchemas";
 import { isSchedulable, findVenueConflict } from "../../../shared/schedule";
 import { resolveFixtureScoring } from "../scoring";
 import { loadFixtureEntrants } from "../entrants";
-import { parseInput, saveFixtureInput, fixtureIdInput, updateLiveStateInput } from "../validation";
+import { parseInput, saveFixtureInput, fixtureIdInput, updateLiveStateInput, undoLiveStateInput } from "../validation";
+import type { MatchConfiguration } from "../../../shared/matchConfig";
+import { cricketOversFrom, tennisBestOfSetsFrom } from "../../../shared/scoring/fromMatchConfiguration";
 
 export async function saveFixture(ctx: AuthContext, input: unknown) {
   const { fixtureId, scheduledDate, scheduledTime, venue } = parseInput(saveFixtureInput, input);
@@ -71,7 +73,7 @@ export async function saveFixture(ctx: AuthContext, input: unknown) {
         },
         after: update,
       }),
-    ]);
+    ], { verifyQueries: true });
   } catch (err) {
     await ctx.db.rollback(transaction);
     throw err;
@@ -134,37 +136,108 @@ export async function startMatch(ctx: AuthContext, input: unknown) {
   return { ok: true };
 }
 
+const HISTORY_LIMIT = 50;
+
+interface HistoryEntry {
+  at: string;
+  by: string;
+  data: Record<string, unknown>;
+}
+
+function enforceConfiguredLength(
+  scoringModel: string,
+  data: Record<string, unknown>,
+  matchConfiguration: MatchConfiguration | null
+): Record<string, unknown> {
+  if (!matchConfiguration) return data;
+  if (scoringModel === "TENNIS_SETS_GAMES" && data.bestOfSets !== tennisBestOfSetsFrom(matchConfiguration)) {
+    throw new AppError(400, "INVALID_LIVE_STATE", "bestOfSets does not match the rules for this match");
+  }
+  if (scoringModel === "CRICKET_INNINGS" && data.oversPerInnings !== cricketOversFrom(matchConfiguration)) {
+    throw new AppError(400, "INVALID_LIVE_STATE", "oversPerInnings does not match the rules for this match");
+  }
+  return data;
+}
+
+async function loadLiveFixture(ctx: AuthContext, fixtureId: string, transaction: string): Promise<FixtureDoc> {
+  const fixture = await ctx.db.getDocument<FixtureDoc>("fixtures", fixtureId, transaction);
+  if (!fixture) throw new AppError(404, "FIXTURE_NOT_FOUND", "Fixture not found");
+  requireSportAccess(ctx, fixture.sportId);
+  if (fixture.status !== "LIVE") {
+    throw new AppError(400, "FIXTURE_NOT_LIVE", "Fixture is not live");
+  }
+  return fixture;
+}
+
 export async function updateLiveState(ctx: AuthContext, input: unknown) {
   const { fixtureId, expectedVersion, data } = parseInput(updateLiveStateInput, input);
 
   const transaction = await ctx.db.beginTransaction();
   try {
-    const fixture = await ctx.db.getDocument<FixtureDoc>("fixtures", fixtureId, transaction);
-    if (!fixture) throw new AppError(404, "FIXTURE_NOT_FOUND", "Fixture not found");
-    requireSportAccess(ctx, fixture.sportId);
-    if (fixture.status !== "LIVE") {
-      throw new AppError(400, "FIXTURE_NOT_LIVE", "Fixture is not live");
-    }
-
-    const { scoringModel } = await resolveFixtureScoring(ctx.db, fixture, transaction);
+    const fixture = await loadLiveFixture(ctx, fixtureId, transaction);
+    const { scoringModel, matchConfiguration } = await resolveFixtureScoring(ctx.db, fixture, transaction);
     const validation = validateLiveState(scoringModel, data);
     if (!validation.ok) {
       throw new AppError(400, "INVALID_LIVE_STATE", validation.message);
     }
+    enforceConfiguredLength(scoringModel, data, matchConfiguration);
 
-    const current = await ctx.db.getDocument<MatchStateDoc>("matchStates", fixtureId, transaction);
+    const current = await ctx.db.getDocument<MatchStateDoc & { history?: HistoryEntry[] }>("matchStates", fixtureId, transaction);
     if (current && current.version !== expectedVersion) {
       throw new AppError(409, "VERSION_CONFLICT", "Match state was updated concurrently");
     }
     const nextVersion = (current?.version ?? 0) + 1;
+    const history = current?.data
+      ? [...(current.history ?? []), { at: new Date().toISOString(), by: ctx.email, data: current.data }].slice(-HISTORY_LIMIT)
+      : current?.history ?? [];
 
     await ctx.db.commit(transaction, [
       {
         collection: "matchStates",
         id: fixtureId,
-        data: { fixtureId, scoringModel, version: nextVersion, data },
-        mergeFields: ["fixtureId", "scoringModel", "version", "data"],
+        data: { fixtureId, scoringModel, version: nextVersion, data, history },
+        mergeFields: ["fixtureId", "scoringModel", "version", "data", "history"],
       },
+    ]);
+  } catch (err) {
+    await ctx.db.rollback(transaction);
+    throw err;
+  }
+
+  return { ok: true };
+}
+
+export async function undoLiveState(ctx: AuthContext, input: unknown) {
+  const { fixtureId, expectedVersion } = parseInput(undoLiveStateInput, input);
+
+  const transaction = await ctx.db.beginTransaction();
+  try {
+    await loadLiveFixture(ctx, fixtureId, transaction);
+    const current = await ctx.db.getDocument<MatchStateDoc & { history?: HistoryEntry[] }>("matchStates", fixtureId, transaction);
+    if (!current) throw new AppError(404, "NOTHING_TO_UNDO", "No score has been recorded yet");
+    if (current.version !== expectedVersion) {
+      throw new AppError(409, "VERSION_CONFLICT", "Match state was updated concurrently");
+    }
+    const history = current.history ?? [];
+    const previous = history[history.length - 1];
+    if (!previous) throw new AppError(400, "NOTHING_TO_UNDO", "There is nothing left to undo");
+
+    await ctx.db.commit(transaction, [
+      {
+        collection: "matchStates",
+        id: fixtureId,
+        data: { fixtureId, version: current.version + 1, data: previous.data, history: history.slice(0, -1) },
+        mergeFields: ["fixtureId", "version", "data", "history"],
+      },
+      auditWrite({
+        action: "undoLiveState",
+        actorEmail: ctx.email,
+        actorRole: ctx.admin.role,
+        targetType: "fixture",
+        targetId: fixtureId,
+        before: current.data,
+        after: previous.data,
+      }),
     ]);
   } catch (err) {
     await ctx.db.rollback(transaction);

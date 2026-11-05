@@ -1,7 +1,9 @@
 export interface SetsPointsConfig {
   bestOf: number;
   pointsToWin: number;
-  capPoints: number;
+  capPoints?: number;
+  setPoints?: number[];
+  decidingSet?: { pointsToWin: number; capPoints?: number };
 }
 
 export interface SetScore {
@@ -15,39 +17,55 @@ export interface SetsPointsState {
   currentSet: number;
 }
 
+export interface SetTarget {
+  pointsToWin: number;
+  capPoints?: number;
+}
+
 export function emptySetsPointsState(): SetsPointsState {
   return { sets: [{ a: 0, b: 0, completed: false }], currentSet: 0 };
 }
 
-function isSetWon(a: number, b: number, config: SetsPointsConfig): "A" | "B" | null {
+export function isDecidingSet(config: SetsPointsConfig, setIndex: number): boolean {
+  return config.bestOf > 1 && setIndex === config.bestOf - 1;
+}
+
+export function setTarget(config: SetsPointsConfig, setIndex: number): SetTarget {
+  const deciding = isDecidingSet(config, setIndex) && config.decidingSet;
+  const pointsToWin = config.setPoints?.[setIndex] ?? (deciding ? config.decidingSet!.pointsToWin : config.pointsToWin);
+  const cap = deciding ? config.decidingSet!.capPoints : config.capPoints;
+  return { pointsToWin, capPoints: cap !== undefined && cap > pointsToWin ? cap : undefined };
+}
+
+export function setWinner(a: number, b: number, target: SetTarget): "A" | "B" | null {
   const leader = a > b ? "A" : b > a ? "B" : null;
   if (!leader) return null;
   const high = Math.max(a, b);
-  const diff = Math.abs(a - b);
-  if (high >= config.capPoints) return leader;
-  if (high >= config.pointsToWin && diff >= 2) return leader;
+  if (target.capPoints !== undefined && high >= target.capPoints) return leader;
+  if (high >= target.pointsToWin && Math.abs(a - b) >= 2) return leader;
   return null;
 }
 
-export function incrementPoint(
-  state: SetsPointsState,
-  side: "A" | "B",
-  config: SetsPointsConfig
-): SetsPointsState {
+function setsWon(sets: SetScore[]): { a: number; b: number } {
+  return {
+    a: sets.filter((s) => s.completed && s.a > s.b).length,
+    b: sets.filter((s) => s.completed && s.b > s.a).length,
+  };
+}
+
+export function incrementPoint(state: SetsPointsState, side: "A" | "B", config: SetsPointsConfig): SetsPointsState {
+  if (matchWinner(state, config)) return state;
   const sets = state.sets.map((s) => ({ ...s }));
   const current = sets[state.currentSet];
-  if (current.completed) return state;
+  if (!current || current.completed) return state;
   if (side === "A") current.a++;
   else current.b++;
 
-  const winner = isSetWon(current.a, current.b, config);
-  if (winner) {
+  if (setWinner(current.a, current.b, setTarget(config, state.currentSet))) {
     current.completed = true;
-    const setsWonA = sets.filter((s) => s.completed && s.a > s.b).length;
-    const setsWonB = sets.filter((s) => s.completed && s.b > s.a).length;
+    const won = setsWon(sets);
     const majority = Math.ceil(config.bestOf / 2);
-    const matchOver = setsWonA >= majority || setsWonB >= majority;
-    if (!matchOver) {
+    if (won.a < majority && won.b < majority) {
       sets.push({ a: 0, b: 0, completed: false });
       return { sets, currentSet: sets.length - 1 };
     }
@@ -66,21 +84,25 @@ export function correctPoint(
   if (!target) return state;
   const a = side === "A" ? Math.max(0, target.a + delta) : target.a;
   const b = side === "B" ? Math.max(0, target.b + delta) : target.b;
-  if (target.completed) {
-    if (!config) return state;
-    const before = isSetWon(target.a, target.b, config);
-    if (before === null || isSetWon(a, b, config) !== before) return state;
+  if (a === target.a && b === target.b) return state;
+  if (config) {
+    const rule = setTarget(config, setIndex);
+    const before = target.completed ? setWinner(target.a, target.b, rule) : null;
+    const after = setWinner(a, b, rule);
+    if (target.completed && (before === null || after !== before)) return state;
+    if (!target.completed && after !== null) return state;
+  } else if (target.completed) {
+    return state;
   }
   const sets = state.sets.map((s, i) => (i === setIndex ? { ...s, a, b } : { ...s }));
   return { sets, currentSet: state.currentSet };
 }
 
 export function matchWinner(state: SetsPointsState, config: SetsPointsConfig): "A" | "B" | null {
-  const setsWonA = state.sets.filter((s) => s.completed && s.a > s.b).length;
-  const setsWonB = state.sets.filter((s) => s.completed && s.b > s.a).length;
+  const won = setsWon(state.sets);
   const majority = Math.ceil(config.bestOf / 2);
-  if (setsWonA >= majority) return "A";
-  if (setsWonB >= majority) return "B";
+  if (won.a >= majority) return "A";
+  if (won.b >= majority) return "B";
   return null;
 }
 

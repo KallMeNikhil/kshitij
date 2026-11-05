@@ -17,12 +17,14 @@ import type { CompleteHandler } from "./types";
 
 const EVENT_LABEL: Record<FootballEventType, string> = {
   GOAL: "Goal",
+  PENALTY_GOAL: "Penalty goal",
+  OWN_GOAL: "Own goal",
   YELLOW_CARD: "Yellow card",
   RED_CARD: "Red card",
 };
 
 function EventIcon({ type }: { type: FootballEventType }) {
-  if (type === "GOAL") return <GoalIcon />;
+  if (type === "GOAL" || type === "PENALTY_GOAL" || type === "OWN_GOAL") return <GoalIcon />;
   return <CardIcon tone={type === "YELLOW_CARD" ? "yellow" : "red"} />;
 }
 

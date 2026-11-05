@@ -15,11 +15,11 @@ describe("fromMatchConfiguration adapters", () => {
 
   it("reads volleyball's configured bestOf/pointsToWin instead of the table-tennis default", () => {
     const config = setsPointsConfigFrom(defaultMatchConfigurations.volleyball, "volleyball");
-    expect(config).toEqual({ bestOf: 3, pointsToWin: 25, capPoints: 34 });
+    expect(config).toEqual({ bestOf: 3, pointsToWin: 25, setPoints: [25, 25, 15], decidingSet: { pointsToWin: 15 } });
   });
 
   it("falls back to the legacy per-sport constant when no configuration is present", () => {
-    expect(setsPointsConfigFrom(null, "table-tennis")).toEqual({ bestOf: 5, pointsToWin: 11, capPoints: 21 });
+    expect(setsPointsConfigFrom(null, "table-tennis")).toEqual({ bestOf: 3, pointsToWin: 11 });
     expect(setsPointsConfigFrom(null, "badminton")).toEqual({ bestOf: 3, pointsToWin: 21, capPoints: 30 });
   });
 
@@ -29,7 +29,7 @@ describe("fromMatchConfiguration adapters", () => {
   });
 
   it("reads cricket overs-per-innings from configuration instead of the old 20-over default", () => {
-    expect(cricketOversFrom(defaultMatchConfigurations.cricket)).toBe(10);
+    expect(cricketOversFrom(defaultMatchConfigurations.cricket)).toBe(8);
     expect(cricketOversFrom(null)).toBe(20);
   });
 });

@@ -1,12 +1,12 @@
 import { AuthContext } from "../auth/authorize";
 import { previewImport, commitImport } from "./import";
 import { generateBracket, publishBracket } from "./bracket";
-import { saveFixture, startMatch, updateLiveState } from "./match";
-import { completeMatch, correctResult } from "./result";
+import { saveFixture, startMatch, updateLiveState, undoLiveState } from "./match";
+import { completeMatch, correctResult, reopenMatch } from "./result";
 import { manageAdmin, upsertEntity, deleteEntity, createAnnouncement, deleteAnnouncement } from "./admin";
 import { updateSportConfig, updateCompetitionConfig } from "./config";
 import { withdrawEntrant } from "./entrant";
-import { postponeFixture, resumeFixture, cancelFixture } from "./lifecycle";
+import { postponeFixture, resumeFixture, cancelFixture, reinstateFixture } from "./lifecycle";
 import {
   galleryAdd,
   galleryUpdate,
@@ -33,8 +33,10 @@ export const operations: ReadonlyMap<string, OperationHandler> = new Map<string,
   ["saveFixture", saveFixture],
   ["startMatch", startMatch],
   ["updateLiveState", updateLiveState],
+  ["undoLiveState", undoLiveState],
   ["completeMatch", completeMatch],
   ["correctResult", correctResult],
+  ["reopenMatch", reopenMatch],
   ["manageAdmin", manageAdmin],
   ["upsertEntity", upsertEntity],
   ["deleteEntity", deleteEntity],
@@ -46,6 +48,7 @@ export const operations: ReadonlyMap<string, OperationHandler> = new Map<string,
   ["postponeFixture", postponeFixture],
   ["resumeFixture", resumeFixture],
   ["cancelFixture", cancelFixture],
+  ["reinstateFixture", reinstateFixture],
   ["previewPurge", previewPurge],
   ["purgeCompetition", purgeCompetition],
   ["deleteEntities", deleteEntities],

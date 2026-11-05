@@ -42,17 +42,19 @@ describe("firestore.rules static audit", () => {
     const scaffold = rules.slice(rules.indexOf("function fixtureIsGenerationScaffolding"), rules.indexOf("function fixtureStatusChangeIsLegal"));
     expect(scaffold).toMatch(/status == 'DRAFT'/);
     expect(scaffold).toMatch(/status == 'COMPLETED'\s*&& \(resource\.data\.slotA\.kind == 'BYE' \|\| resource\.data\.slotB\.kind == 'BYE'\)/);
-    expect(scaffold).not.toMatch(/'LIVE'|'SCHEDULED'/);
+    expect(scaffold).toMatch(/status == 'SCHEDULED'\s*&& !exists\(\/databases\/\$\(database\)\/documents\/matchStates\//);
+    expect(scaffold).not.toMatch(/'LIVE'|'POSTPONED'|'CANCELLED'/);
     expect(rules).toMatch(/hasAny\(\['fixtureId', 'competitionId', 'matchConfigurationSnapshot'\]\)/);
     expect(rules).toMatch(/!changed\(\)\.hasAny\(\['sportId'\]\) \|\| !\('sportId' in resource\.data\)/);
   });
 
-  it("restricts fixture status to the legal lifecycle and keeps COMPLETED and CANCELLED terminal", () => {
+  it("restricts fixture status to the legal lifecycle; only a Super Admin reopens or reinstates", () => {
     expect(block("fixtures/{fixtureId}")).toMatch(/fixtureStatusChangeIsLegal\(\)/);
     const fn = rules.slice(rules.indexOf("function fixtureStatusChangeIsLegal"), rules.indexOf("function lifecycleReasonIsValid"));
     expect(fn).toMatch(/resource\.data\.status == 'LIVE' && request\.resource\.data\.status in \['COMPLETED', 'POSTPONED', 'CANCELLED'\]/);
-    expect(fn).toMatch(/resource\.data\.status == 'POSTPONED' && request\.resource\.data\.status in \['SCHEDULED', 'LIVE', 'CANCELLED'\]/);
-    expect(fn).not.toMatch(/(?<!request\.)resource\.data\.status == '(COMPLETED|CANCELLED)'/);
+    expect(fn).toMatch(/resource\.data\.status == 'POSTPONED' && request\.resource\.data\.status in \['SCHEDULED', 'LIVE', 'COMPLETED', 'CANCELLED'\]/);
+    expect(fn).toMatch(/resource\.data\.status == 'COMPLETED' && request\.resource\.data\.status == 'LIVE' && isSuperAdmin\(\)/);
+    expect(fn).toMatch(/resource\.data\.status == 'CANCELLED' && request\.resource\.data\.status == 'SCHEDULED' && isSuperAdmin\(\)/);
     expect(fn).not.toMatch(/resource\.data\.status == 'DRAFT' && request\.resource\.data\.status in \[[^\]]*'(POSTPONED|CANCELLED)'/);
   });
 
@@ -97,16 +99,17 @@ describe("firestore.rules static audit", () => {
   it("coordinators can neither cancel a fixture nor complete one without a result recorded in the same batch", () => {
     const status = rules.slice(rules.indexOf("function coordinatorResultIsRecorded"), rules.indexOf("function coordinatorFixtureUpdateIsLegal"));
     expect(status).toMatch(/request\.resource\.data\.status != 'CANCELLED'/);
-    expect(status).toMatch(/resource\.data\.status == 'LIVE' && coordinatorResultIsRecorded\(resource\.data\.fixtureId\)/);
+    expect(status).toMatch(/resource\.data\.status in \['LIVE', 'SCHEDULED', 'POSTPONED'\] && coordinatorResultIsRecorded\(resource\.data\.fixtureId\)/);
     expect(status).toMatch(/existsAfter\(/);
     expect(status).toMatch(/getAfter\(.*matchStates.*\.data\.result\.winnerSlot in \['A', 'B'\]/);
     expect(rules.slice(rules.indexOf("function coordinatorFixtureUpdateIsLegal"), rules.indexOf("match /fixtures/"))).toMatch(/&& coordinatorStatusChangeIsAllowed\(\)/);
   });
 
-  it("only a Super Admin may write a result or penalties outside the batch that completes a LIVE fixture", () => {
-    const gate = rules.slice(rules.indexOf("function coordinatorMayWriteResult"), rules.indexOf("match /matchStates/"));
-    expect(gate).toMatch(/fixtureOf\(fixtureId\)\.status == 'LIVE'/);
-    expect(gate).toMatch(/getAfter\(.*fixtures.*\.data\.status == 'COMPLETED'/);
+  it("only a Super Admin may write a result or penalties outside the batch that completes a started fixture or a walkover", () => {
+    const gate = rules.slice(rules.indexOf("function coordinatorMayWriteResult"), rules.indexOf("function earlyResultCompletesFixture"));
+    expect(gate).toMatch(/completesInThisBatch\(fixtureId\)/);
+    expect(gate).toMatch(/startedBefore\(fixtureId\) \|\| request\.resource\.data\.get\('result', \{\}\)\.get\('decidedBy', ''\) == 'WALKOVER'/);
+    expect(rules).toMatch(/function completesInThisBatch[\s\S]*?getAfter\(.*fixtures.*\.data\.status == 'COMPLETED'/);
     const b = block("matchStates/{fixtureId}");
     expect(b).toMatch(/isSuperAdmin\(\) \|\| !request\.resource\.data\.keys\(\)\.hasAny\(\['result', 'penalties'\]\) \|\| coordinatorMayWriteResult\(fixtureId\)/);
     expect(b).toMatch(/isSuperAdmin\(\) \|\| !changed\(\)\.hasAny\(\['result', 'penalties'\]\) \|\| coordinatorMayWriteResult\(fixtureId\)/);
@@ -130,9 +133,10 @@ describe("firestore.rules static audit", () => {
     expect(b).toMatch(/version == 1/);
     expect(b).toMatch(/version == resource\.data\.version \+ 1/);
     expect(b).toMatch(/allow delete: if false;/);
-    expect(rules).toMatch(/hasOnly\(\['fixtureId', 'scoringModel', 'version', 'data', 'result', 'penalties'\]\)/);
-    expect(rules).toMatch(/'WALKOVER', 'ADMIN_OVERRIDE'/);
-    expect(b).toMatch(/fixtureOf\(fixtureId\)\.status == 'LIVE'/);
+    expect(rules).toMatch(/hasOnly\(\['fixtureId', 'scoringModel', 'version', 'data', 'result', 'penalties', 'history'\]\)/);
+    expect(rules).toMatch(/history\.size\(\) <= 50/);
+    expect(rules).toMatch(/decidedBy in \['WALKOVER', 'RETIRED'\]\s*\|\| request\.resource\.data\.result\.decidedBy == request\.resource\.data\.get\('scoringModel', ''\)/);
+    expect(b).toMatch(/liveDuringBatch\(fixtureId\)/);
   });
 
   it("requires a configVersion bump for any matchConfiguration change on sports and competitions", () => {
@@ -178,10 +182,13 @@ describe("firestore.rules static audit", () => {
     expect(fn).toMatch(/request\.resource\.data\.round > 1 && slotIsFeederWinner\('B'\)/);
   });
 
-  it("only lets a Super Admin create a match state for a SCHEDULED fixture, and only as a WALKOVER", () => {
+  it("only accepts a match state for an unstarted fixture as an early result that completes it in the same batch", () => {
     const create = block("matchStates/{fixtureId}").match(/allow create:[\s\S]*?;\n/)![0];
-    expect(create).toMatch(/isSuperAdmin\(\)\s*&& fixtureOf\(fixtureId\)\.status == 'SCHEDULED'\s*&& request\.resource\.data\.get\('result', \{\}\)\.get\('decidedBy', ''\) == 'WALKOVER'/);
-    expect(block("matchStates/{fixtureId}").match(/allow update:[\s\S]*?;\n/)![0]).not.toMatch(/SCHEDULED/);
+    expect(create).toMatch(/fixtureOf\(fixtureId\)\.status in \['LIVE', 'COMPLETED'\] \|\| earlyResultCompletesFixture\(fixtureId\)/);
+    const fn = rules.slice(rules.indexOf("function earlyResultCompletesFixture"), rules.indexOf("match /matchStates/"));
+    expect(fn).toMatch(/status in \['SCHEDULED', 'POSTPONED'\]/);
+    expect(fn).toMatch(/in earlyResultTypes\(\)/);
+    expect(fn).toMatch(/completesInThisBatch\(fixtureId\)/);
   });
 
   it("only generation scaffolding fixtures can be deleted; played history and recorded results cannot", () => {

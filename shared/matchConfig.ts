@@ -14,9 +14,6 @@ export const participantModelSchema = z
   .strict()
   .refine((v) => (v.participantType === "TEAM" ? !!v.teamSize : true), {
     message: "TEAM_SIZE_REQUIRED_FOR_TEAM_PARTICIPANT_MODEL",
-  })
-  .refine((v) => (v.participantType === "PAIR" ? true : true), {
-    message: "PAIR_OK",
   });
 
 export type ParticipantModel = z.infer<typeof participantModelSchema>;
@@ -55,6 +52,7 @@ export const matchStructureSchema = z.discriminatedUnion("kind", [
       tieBreakPoints: z.number().int().positive().optional(),
       finalSetFormat: z.enum(["FULL_SET", "SUPER_TIE_BREAK"]).optional(),
       superTieBreakPoints: z.number().int().positive().optional(),
+      noAd: z.boolean().optional(),
     })
     .strict(),
   z
@@ -82,11 +80,33 @@ export const matchStructureSchema = z.discriminatedUnion("kind", [
       drawAllowed: z.boolean().default(true),
       tieBreak: z.string().optional(),
       pointDetail: z.enum(["NONE", "SCORE_BREAKDOWN"]).default("NONE"),
+      bestOfBoards: z.number().int().positive().optional(),
     })
     .strict(),
 ]);
 
 export type MatchStructure = z.infer<typeof matchStructureSchema>;
+
+const isOdd = (n: number) => n % 2 === 1;
+
+export function structureIssues(structure: MatchStructure): string[] {
+  const issues: string[] = [];
+  if (structure.kind === "SETS_POINTS") {
+    if (!isOdd(structure.bestOf)) issues.push("BEST_OF_MUST_BE_ODD");
+    if (structure.capPoints !== undefined && structure.capPoints <= structure.pointsToWin) issues.push("CAP_MUST_EXCEED_POINTS_TO_WIN");
+    if ((structure.setPointsBySetIndex?.length ?? 0) > structure.bestOf) issues.push("TOO_MANY_SET_POINT_ENTRIES");
+    const deciding = structure.decidingSetFormat;
+    if (deciding?.capPoints !== undefined && deciding.capPoints <= deciding.pointsToWin) issues.push("DECIDING_CAP_MUST_EXCEED_POINTS_TO_WIN");
+  }
+  if (structure.kind === "GAMES_SETS") {
+    if (!isOdd(structure.bestOfSets)) issues.push("BEST_OF_SETS_MUST_BE_ODD");
+    if (structure.tieBreakAtGames !== undefined && structure.tieBreakAtGames > structure.gamesPerSet) issues.push("TIE_BREAK_AFTER_SET_END");
+  }
+  if (structure.kind === "RESULT_ONLY" && structure.bestOfBoards !== undefined && !isOdd(structure.bestOfBoards)) {
+    issues.push("BEST_OF_BOARDS_MUST_BE_ODD");
+  }
+  return issues;
+}
 
 export const matchStructureKindByScoringModel: Record<ScoringModel, MatchStructure["kind"]> = {
   BASKETBALL_POINTS: "PERIODS",
@@ -129,6 +149,17 @@ export const matchConfigurationSchema = z
   })
   .refine((v) => new Set((v.roundOverrides ?? []).map((o) => o.roundsFromEnd)).size === (v.roundOverrides ?? []).length, {
     message: "DUPLICATE_ROUND_OVERRIDE",
+  })
+  .superRefine((v, ctx) => {
+    for (const message of structureIssues(v.structure)) ctx.addIssue({ code: "custom", path: ["structure"], message });
+    (v.roundOverrides ?? []).forEach((o, i) => {
+      for (const message of structureIssues(o.structure)) ctx.addIssue({ code: "custom", path: ["roundOverrides", i, "structure"], message });
+    });
+    const wickets = v.structure.kind === "INNINGS" ? v.structure.wicketsPerInnings : undefined;
+    const maxPlayers = v.participantModel.teamSize?.max;
+    if (wickets !== undefined && maxPlayers !== undefined && wickets > maxPlayers - 1) {
+      ctx.addIssue({ code: "custom", path: ["structure", "wicketsPerInnings"], message: "WICKETS_EXCEED_TEAM_SIZE" });
+    }
   });
 
 export type MatchConfiguration = z.infer<typeof matchConfigurationSchema>;
@@ -140,6 +171,15 @@ export function configurationForRound(config: MatchConfiguration, round: number,
 }
 
 export const defaultMatchConfigurations: Partial<Record<string, MatchConfiguration>> = {
+  badminton: {
+    configVersion: 1,
+    scoringModel: "SETS_POINTS",
+    participantModel: { participantType: "INDIVIDUAL" },
+    structure: { kind: "SETS_POINTS", bestOf: 3, pointsToWin: 21, capPoints: 30 },
+    walkoverBehavior: "OPPONENT_WINS",
+    byeBehavior: "AUTO_ADVANCE",
+    pending: [],
+  },
   basketball: {
     configVersion: 1,
     scoringModel: "BASKETBALL_POINTS",
@@ -168,11 +208,10 @@ export const defaultMatchConfigurations: Partial<Record<string, MatchConfigurati
     configVersion: 1,
     scoringModel: "SETS_POINTS",
     participantModel: { participantType: "INDIVIDUAL" },
-    structure: { kind: "SETS_POINTS", bestOf: 3, pointsToWin: 11, capPoints: undefined },
-
+    structure: { kind: "SETS_POINTS", bestOf: 3, pointsToWin: 11 },
     roundOverrides: [
-      { roundsFromEnd: 1, structure: { kind: "SETS_POINTS", bestOf: 5, pointsToWin: 11, capPoints: undefined } },
-      { roundsFromEnd: 0, structure: { kind: "SETS_POINTS", bestOf: 5, pointsToWin: 11, capPoints: undefined } },
+      { roundsFromEnd: 1, structure: { kind: "SETS_POINTS", bestOf: 5, pointsToWin: 11 } },
+      { roundsFromEnd: 0, structure: { kind: "SETS_POINTS", bestOf: 5, pointsToWin: 11 } },
     ],
     walkoverBehavior: "OPPONENT_WINS",
     byeBehavior: "AUTO_ADVANCE",
@@ -187,38 +226,44 @@ export const defaultMatchConfigurations: Partial<Record<string, MatchConfigurati
       bestOfSets: 3,
       gamesPerSet: 6,
       tieBreakAtGames: 6,
+      tieBreakPoints: 7,
       finalSetFormat: "SUPER_TIE_BREAK",
+      superTieBreakPoints: 10,
     },
     walkoverBehavior: "OPPONENT_WINS",
     byeBehavior: "AUTO_ADVANCE",
-    pending: ["exact round-by-round format (e.g. full final set in later rounds) not fully confirmed"],
+    pending: [],
   },
   cricket: {
     configVersion: 1,
     scoringModel: "CRICKET_INNINGS",
     participantModel: { participantType: "TEAM", teamSize: { min: 11, max: 15 }, substitutesAllowed: 4 },
-    structure: { kind: "INNINGS", oversPerInnings: 10, inningsPerSide: 1 },
+    structure: { kind: "INNINGS", oversPerInnings: 8, inningsPerSide: 1, wicketsPerInnings: 10 },
+    roundOverrides: [
+      { roundsFromEnd: 1, structure: { kind: "INNINGS", oversPerInnings: 10, inningsPerSide: 1, wicketsPerInnings: 10 } },
+      { roundsFromEnd: 0, structure: { kind: "INNINGS", oversPerInnings: 10, inningsPerSide: 1, wicketsPerInnings: 10 } },
+    ],
     walkoverBehavior: "OPPONENT_WINS",
     byeBehavior: "AUTO_ADVANCE",
-    pending: ["coordinator wording \"eight innings, ten\" is ambiguous and was not interpreted"],
+    pending: [],
   },
   chess: {
     configVersion: 1,
     scoringModel: "RESULT_ONLY",
     participantModel: { participantType: "INDIVIDUAL" },
-    structure: { kind: "RESULT_ONLY", drawAllowed: true, pointDetail: "NONE" },
+    structure: { kind: "RESULT_ONLY", drawAllowed: true, tieBreak: "Rapid tie-break game", pointDetail: "NONE" },
     walkoverBehavior: "OPPONENT_WINS",
     byeBehavior: "AUTO_ADVANCE",
-    pending: ["draw/tiebreak rules not finalized"],
+    pending: [],
   },
   carrom: {
     configVersion: 1,
     scoringModel: "RESULT_ONLY",
     participantModel: { participantType: "PAIR" },
-    structure: { kind: "RESULT_ONLY", drawAllowed: false, pointDetail: "SCORE_BREAKDOWN" },
+    structure: { kind: "RESULT_ONLY", drawAllowed: false, pointDetail: "SCORE_BREAKDOWN", bestOfBoards: 3 },
     walkoverBehavior: "OPPONENT_WINS",
     byeBehavior: "AUTO_ADVANCE",
-    pending: ["exact point calculation (white/black/pink counts) not finalized"],
+    pending: [],
   },
   football: {
     configVersion: 1,

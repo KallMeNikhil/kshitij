@@ -43,14 +43,24 @@ describe("completeMatch: walkover, withdrawn entrants, configured behavior", () 
     const writes = db.commit.mock.calls[0][1];
     const ms = writes.find((w: { collection: string }) => w.collection === "matchStates");
     expect(ms.data).toMatchObject({ version: 1, result: { winnerSlot: "B", decidedBy: "WALKOVER" } });
-    expect(writes.at(-1).data).toMatchObject({ action: "completeMatch", actorRole: "SUPER_ADMIN", before: { status: "SCHEDULED" }, after: { status: "COMPLETED", override: true } });
+    expect(writes.at(-1).data).toMatchObject({ action: "completeMatch", actorRole: "SUPER_ADMIN", before: { status: "SCHEDULED" }, after: { status: "COMPLETED", earlyEnd: true } });
   });
 
-  it("does NOT extend that to coordinators, normal completions or ADMIN_OVERRIDE (those still require LIVE)", async () => {
+  it("lets a coordinator record a no-show walkover, but not score results, retirements or decisions before play", async () => {
     const mk = () => dbWith({ fixtures: [fixture()] });
-    await expect(complete(coordinator(mk()))).rejects.toMatchObject({ code: "SUPER_ADMIN_REQUIRED" });
+    await expect(complete(coordinator(mk()))).resolves.toMatchObject({ ok: true });
     await expect(complete(ctxFor(mk()), { decidedBy: "BASKETBALL_POINTS" })).rejects.toMatchObject({ code: "FIXTURE_NOT_LIVE" });
-    await expect(complete(ctxFor(mk()), { decidedBy: "ADMIN_OVERRIDE" })).rejects.toMatchObject({ code: "FIXTURE_NOT_LIVE" });
+    await expect(complete(coordinator(mk()), { decidedBy: "RETIRED" })).rejects.toMatchObject({ code: "RESULT_TYPE_NOT_ALLOWED" });
+    await expect(complete(coordinator(mk()), { decidedBy: "ADMIN_DECISION" })).rejects.toMatchObject({ code: "SUPER_ADMIN_REQUIRED" });
+    await expect(complete(ctxFor(mk()), { decidedBy: "ADMIN_OVERRIDE" })).resolves.toMatchObject({ ok: true });
+  });
+
+  it("records a walkover on a postponed match and clears its postponement fields", async () => {
+    const db = dbWith({ fixtures: [fixture({ status: "POSTPONED", statusReason: "rain", resumeStatus: "SCHEDULED" })] });
+    await complete(ctxFor(db));
+    const src = db.commit.mock.calls[0][1].find((w: { id: string }) => w.id === FID);
+    expect(src.mergeFields).toEqual(expect.arrayContaining(["status", "statusReason", "resumeStatus"]));
+    expect(src.data).toMatchObject({ status: "COMPLETED" });
   });
 
   it("never advances a withdrawn entrant: rejected as winner of a walkover and of a normal completion", async () => {
@@ -104,7 +114,10 @@ describe("bracket integrity guard on propagation", () => {
 
   it("does not let a PRE-EXISTING inconsistency block unrelated scoring (only newly introduced violations fail)", async () => {
     const miswired = r1(2, { nextSlot: "A" });
-    const db = dbWith({ fixtures: [r1(1), miswired, r2()] });
+    const db = dbWith({
+      fixtures: [r1(1), miswired, r2()],
+      docs: { "matchStates/basketball-mens-r1-m01": { fixtureId: "x", scoringModel: "BASKETBALL_POINTS", version: 1, data: { scoreA: 9, scoreB: 2, period: 4, overtime: false, ended: true } } },
+    });
     await expect(
       completeMatch(coordinator(db), { fixtureId: "basketball-mens-r1-m01", winnerSlot: "A", decidedBy: "BASKETBALL_POINTS", resultSummary: "x" })
     ).resolves.toMatchObject({ ok: true });

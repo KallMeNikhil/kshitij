@@ -20,19 +20,29 @@ const basketballStateSchema = z
       .array(z.object({ a: z.number().int().min(0), b: z.number().int().min(0) }).strict())
       .max(30)
       .optional(),
+    ended: z.boolean().optional(),
   })
   .strict();
 
 const tennisPointSchema = z.union([z.literal(0), z.literal(15), z.literal(30), z.literal(40), z.literal("AD")]);
 const tennisSetSchema = z
-  .object({ gamesA: z.number().int().min(0), gamesB: z.number().int().min(0), completed: z.boolean() })
+  .object({
+    gamesA: z.number().int().min(0),
+    gamesB: z.number().int().min(0),
+    completed: z.boolean(),
+    tiebreakA: z.number().int().min(0).optional(),
+    tiebreakB: z.number().int().min(0).optional(),
+  })
   .strict();
 const tennisStateSchema = z
   .object({
     sets: z.array(tennisSetSchema).min(1),
     currentGame: z.object({ pointsA: tennisPointSchema, pointsB: tennisPointSchema }).strict(),
     bestOfSets: z.number().int().positive(),
-    tiebreak: z.object({ a: z.number().int().min(0), b: z.number().int().min(0) }).strict().optional(),
+    tiebreak: z
+      .object({ a: z.number().int().min(0), b: z.number().int().min(0), super: z.boolean().optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -43,6 +53,8 @@ const inningsStateSchema = z
     oversCompleted: z.number().int().min(0),
     ballsInOver: z.number().int().min(0).max(5),
     allOut: z.boolean(),
+    extras: z.number().int().min(0).optional(),
+    closed: z.boolean().optional(),
   })
   .strict();
 const cricketStateSchema = z
@@ -52,13 +64,14 @@ const cricketStateSchema = z
     innings1: inningsStateSchema,
     innings2: inningsStateSchema,
     currentInnings: z.union([z.literal(1), z.literal(2)]),
+    toss: z.object({ winner: z.enum(["A", "B"]), decision: z.enum(["BAT", "BOWL"]) }).strict().optional(),
   })
   .strict();
 
 const footballEventSchema = z
   .object({
     id: z.string().min(1),
-    type: z.enum(["GOAL", "YELLOW_CARD", "RED_CARD"]),
+    type: z.enum(["GOAL", "PENALTY_GOAL", "OWN_GOAL", "YELLOW_CARD", "RED_CARD"]),
     side: z.enum(["A", "B"]),
     playerId: z.string().min(1),
     minute: z.number().int().min(0).max(200),
@@ -66,13 +79,22 @@ const footballEventSchema = z
   .strict();
 const footballStateSchema = z
   .object({
-    events: z.array(footballEventSchema),
+    events: z.array(footballEventSchema).max(200),
     penalties: z.object({ a: z.number().int().min(0), b: z.number().int().min(0) }).strict().optional(),
+    ended: z.boolean().optional(),
   })
   .strict();
 
 const resultOnlyStateSchema = z
-  .object({ outcome: z.enum(["A", "B", "DRAW"]).nullable() })
+  .object({
+    outcome: z.enum(["A", "B", "DRAW"]).nullable(),
+    tieBreakWinner: z.enum(["A", "B"]).optional(),
+    method: z.string().trim().min(1).max(40).optional(),
+    boards: z
+      .array(z.object({ a: z.number().int().min(0).max(999), b: z.number().int().min(0).max(999) }).strict())
+      .max(15)
+      .optional(),
+  })
   .strict();
 
 export const liveStateSchemaByModel: Record<ScoringModel, z.ZodTypeAny> = {

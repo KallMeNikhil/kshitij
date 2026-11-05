@@ -239,5 +239,8 @@ export interface MatchStateDoc {
     winnerSlot: "A" | "B" | null;
     decidedBy: string;
     summary: string;
+    reason?: string;
   };
+  penalties?: { a: number; b: number };
+  history?: Array<{ at: string; by: string; data: Record<string, unknown> }>;
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { emptySetsPointsState, incrementPoint, correctPoint, matchWinner as setsMatchWinner } from "./sets-points";
-import { emptyCricketState, target, runsRequired, computeResult } from "./cricket-innings";
+import { emptyCricketState, target, runsRequired, computeResult, recordBall, isMatchOver, battingFirstFromToss } from "./cricket-innings";
 import { emptyTennisState, winPoint } from "./tennis-sets-games";
 import { emptyBasketballState, addPoints, decideWinner as bbWinner } from "./basketball-points";
 import { emptyFootballState, addEvent, score, decideWinner as fbWinner } from "./football-events";
@@ -40,43 +40,83 @@ describe("sets-points (badminton/TT/volleyball)", () => {
 });
 
 describe("cricket-innings", () => {
-  it("computes target as innings1 runs + 1", () => {
-    let state = emptyCricketState(20, "A");
+  const chasing = (runs1: number) => {
+    const state = emptyCricketState(20, "A");
+    state.innings1.runs = runs1;
+    state.currentInnings = 2;
+    return state;
+  };
+
+  it("computes target as innings1 runs + 1 once the chase begins", () => {
+    const state = emptyCricketState(20, "A");
     state.innings1.runs = 150;
-    expect(target(state)).toBe(151);
+    expect(target(state)).toBe(null);
+    expect(target(chasing(150))).toBe(151);
   });
 
   it("computes runs required for the chase", () => {
-    let state = emptyCricketState(20, "A");
-    state.innings1.runs = 150;
+    const state = chasing(150);
     state.innings2.runs = 100;
     expect(runsRequired(state)).toBe(51);
   });
 
   it("declares the chaser winner by wickets when target is reached", () => {
-    let state = emptyCricketState(20, "A");
-    state.innings1.runs = 150;
+    const state = chasing(150);
     state.innings2.runs = 151;
     state.innings2.wickets = 4;
     const result = computeResult(state);
     expect(result.winner).toBe("B");
-    expect(result.margin).toContain("wicket");
+    expect(result.margin).toBe("by 6 wickets");
   });
 
-  it("declares the setter winner by runs when target isn't reached", () => {
-    let state = emptyCricketState(20, "A");
-    state.innings1.runs = 150;
+  it("does not declare a winner while the chase is still on", () => {
+    const state = chasing(150);
     state.innings2.runs = 120;
+    expect(computeResult(state).winner).toBe(null);
+    state.innings2.runs = 150;
+    expect(computeResult(state).winner).toBe(null);
+  });
+
+  it("declares the setter winner by runs once the chase ends short", () => {
+    const state = chasing(150);
+    state.innings2.runs = 120;
+    state.innings2.oversCompleted = 20;
     const result = computeResult(state);
     expect(result.winner).toBe("A");
-    expect(result.margin).toBe("by 30 run(s)");
+    expect(result.margin).toBe("by 30 runs");
   });
 
   it("declares a tie when scores are level after both innings", () => {
-    let state = emptyCricketState(20, "A");
-    state.innings1.runs = 150;
+    const state = chasing(150);
     state.innings2.runs = 150;
+    state.innings2.wickets = 10;
     expect(computeResult(state).winner).toBe("TIE");
+  });
+
+  it("counts extras without using up legal balls and ends innings automatically", () => {
+    let state = emptyCricketState(1, "B");
+    state = recordBall(state, { extra: "WIDE" });
+    state = recordBall(state, { extra: "NO_BALL", runs: 4 });
+    expect(state.innings1).toMatchObject({ runs: 6, extras: 2, ballsInOver: 0 });
+    state = recordBall(state, { extra: "LEG_BYE", runs: 1 });
+    expect(state.innings1).toMatchObject({ runs: 7, extras: 3, ballsInOver: 1 });
+    for (let i = 0; i < 5; i++) state = recordBall(state, { runs: 1 });
+    expect(state.currentInnings).toBe(2);
+    expect(state.innings1).toMatchObject({ runs: 12, oversCompleted: 1 });
+    state = recordBall(state, { runs: 6 });
+    state = recordBall(state, { runs: 6 });
+    state = recordBall(state, { runs: 1 });
+    expect(isMatchOver(state)).toBe(true);
+    expect(computeResult(state)).toEqual({ winner: "A", margin: "by 10 wickets" });
+    expect(recordBall(state, { runs: 4 })).toBe(state);
+  });
+
+  it("closes the innings on the last wicket and derives batting order from the toss", () => {
+    expect(battingFirstFromToss({ winner: "A", decision: "BOWL" })).toBe("B");
+    let state = emptyCricketState(10, "A");
+    for (let i = 0; i < 2; i++) state = recordBall(state, { wicket: true }, 2);
+    expect(state.innings1.allOut).toBe(true);
+    expect(state.currentInnings).toBe(2);
   });
 });
 
@@ -210,7 +250,7 @@ describe("configurable scoring rules", () => {
     expect(s.tiebreak).toEqual({ a: 0, b: 0 });
     for (let i = 0; i < 7; i++) s = winPoint(s, "A", rules);
     expect(s.tiebreak).toBeUndefined();
-    expect(s.sets[0]).toEqual({ gamesA: 7, gamesB: 6, completed: true });
+    expect(s.sets[0]).toEqual({ gamesA: 7, gamesB: 6, completed: true, tiebreakA: 7, tiebreakB: 0 });
   });
 
   it("tennis tie-break needs a 2-point margin", () => {
@@ -226,6 +266,7 @@ describe("configurable scoring rules", () => {
 
   it("cricket result uses the configured wicket count", () => {
     const state = emptyCricketState(20, "A");
+    state.currentInnings = 2;
     state.innings1.runs = 100;
     state.innings2.runs = 101;
     state.innings2.wickets = 4;

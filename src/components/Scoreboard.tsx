@@ -13,7 +13,7 @@ import { basketballConfigFrom } from "../../shared/scoring/fromMatchConfiguratio
 import { periodName, periodScores } from "../../shared/scoring/basketball-points";
 import type { MatchConfiguration } from "../../shared/matchConfig";
 
-const EVENT_NAME = { GOAL: "Goal", YELLOW_CARD: "Yellow card", RED_CARD: "Red card" } as const;
+const EVENT_NAME = { GOAL: "Goal", PENALTY_GOAL: "Penalty goal", OWN_GOAL: "Own goal", YELLOW_CARD: "Yellow card", RED_CARD: "Red card" } as const;
 
 export function SetsPointsScoreboard({ state, labelA, labelB }: { state: SetsPointsState; labelA: string; labelB: string }) {
   const current = state.sets[state.currentSet];
@@ -88,7 +88,7 @@ export function FootballScoreboard({ state, labelA, labelB }: { state: FootballS
             .map((e) => (
               <li key={e.id} className="scoreboard__event">
                 <span className="scoreboard__event-minute">{e.minute}'</span>
-                {e.type === "GOAL" ? <GoalIcon size={16} /> : <CardIcon tone={e.type === "YELLOW_CARD" ? "yellow" : "red"} size={16} />}
+                {e.type === "GOAL" || e.type === "PENALTY_GOAL" || e.type === "OWN_GOAL" ? <GoalIcon size={16} /> : <CardIcon tone={e.type === "YELLOW_CARD" ? "yellow" : "red"} size={16} />}
                 <span>
                   {EVENT_NAME[e.type]} · {e.side === "A" ? labelA : labelB}
                 </span>

@@ -81,7 +81,9 @@ service cloud.firestore {
     function fixtureIsGenerationScaffolding() {
       return resource.data.status == 'DRAFT'
         || (resource.data.status == 'COMPLETED'
-            && (resource.data.slotA.kind == 'BYE' || resource.data.slotB.kind == 'BYE'));
+            && (resource.data.slotA.kind == 'BYE' || resource.data.slotB.kind == 'BYE'))
+        || (resource.data.status == 'SCHEDULED'
+            && !exists(/databases/$(database)/documents/matchStates/$(resource.data.fixtureId)));
     }
 
     function fixtureStatusChangeIsLegal() {
@@ -89,7 +91,9 @@ service cloud.firestore {
         || (resource.data.status == 'DRAFT' && request.resource.data.status in ['SCHEDULED', 'COMPLETED'])
         || (resource.data.status == 'SCHEDULED' && request.resource.data.status in ['LIVE', 'COMPLETED', 'POSTPONED', 'CANCELLED'])
         || (resource.data.status == 'LIVE' && request.resource.data.status in ['COMPLETED', 'POSTPONED', 'CANCELLED'])
-        || (resource.data.status == 'POSTPONED' && request.resource.data.status in ['SCHEDULED', 'LIVE', 'CANCELLED']);
+        || (resource.data.status == 'POSTPONED' && request.resource.data.status in ['SCHEDULED', 'LIVE', 'COMPLETED', 'CANCELLED'])
+        || (resource.data.status == 'COMPLETED' && request.resource.data.status == 'LIVE' && isSuperAdmin())
+        || (resource.data.status == 'CANCELLED' && request.resource.data.status == 'SCHEDULED' && isSuperAdmin());
     }
 
     function lifecycleReasonIsValid() {
@@ -105,8 +109,10 @@ service cloud.firestore {
             ? lifecycleReasonIsValid() && request.resource.data.get('resumeStatus', '') == resource.data.status
             : (request.resource.data.status == 'CANCELLED'
                 ? lifecycleReasonIsValid() && !('resumeStatus' in request.resource.data)
-                : (resource.data.status == 'POSTPONED'
-                    ? request.resource.data.status == resource.data.get('resumeStatus', 'SCHEDULED')
+                : (resource.data.status in ['POSTPONED', 'CANCELLED']
+                    ? (resource.data.status == 'CANCELLED'
+                        || request.resource.data.status == 'COMPLETED'
+                        || request.resource.data.status == resource.data.get('resumeStatus', 'SCHEDULED'))
                       && !('statusReason' in request.resource.data)
                       && !('resumeStatus' in request.resource.data)
                     : !changed().hasAny(['statusReason', 'resumeStatus']))));
@@ -140,7 +146,7 @@ service cloud.firestore {
     function coordinatorStatusChangeIsAllowed() {
       return request.resource.data.status != 'CANCELLED'
         && (request.resource.data.status != 'COMPLETED'
-            || (resource.data.status == 'LIVE' && coordinatorResultIsRecorded(resource.data.fixtureId)));
+            || (resource.data.status in ['LIVE', 'SCHEDULED', 'POSTPONED'] && coordinatorResultIsRecorded(resource.data.fixtureId)));
     }
 
     function coordinatorFixtureUpdateIsLegal() {
@@ -173,22 +179,47 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/fixtures/$(fixtureId)).data;
     }
 
+    function earlyResultTypes() {
+      return ['WALKOVER', 'RETIRED', 'DISQUALIFIED', 'ABANDONED', 'ADMIN_DECISION', 'ADMIN_OVERRIDE'];
+    }
+
     function matchStateShapeIsLegal(fixtureId) {
-      return request.resource.data.keys().hasOnly(['fixtureId', 'scoringModel', 'version', 'data', 'result', 'penalties'])
+      return request.resource.data.keys().hasOnly(['fixtureId', 'scoringModel', 'version', 'data', 'result', 'penalties', 'history'])
         && request.resource.data.fixtureId == fixtureId
         && request.resource.data.version is int
+        && (!('history' in request.resource.data) || (request.resource.data.history is list && request.resource.data.history.size() <= 50))
         && (!('result' in request.resource.data)
             || (request.resource.data.result.winnerSlot in ['A', 'B']
                 && request.resource.data.result.decidedBy is string))
-
         && (isSuperAdmin()
             || !('result' in request.resource.data)
-            || !(request.resource.data.result.decidedBy in ['WALKOVER', 'ADMIN_OVERRIDE']));
+            || request.resource.data.result.decidedBy in ['WALKOVER', 'RETIRED']
+            || request.resource.data.result.decidedBy == request.resource.data.get('scoringModel', ''));
+    }
+
+    function startedBefore(fixtureId) {
+      return fixtureOf(fixtureId).status == 'LIVE'
+        || (fixtureOf(fixtureId).status == 'POSTPONED' && fixtureOf(fixtureId).get('resumeStatus', '') == 'LIVE');
+    }
+
+    function liveDuringBatch(fixtureId) {
+      return fixtureOf(fixtureId).status == 'LIVE'
+        || getAfter(/databases/$(database)/documents/fixtures/$(fixtureId)).data.status == 'LIVE';
+    }
+
+    function completesInThisBatch(fixtureId) {
+      return getAfter(/databases/$(database)/documents/fixtures/$(fixtureId)).data.status == 'COMPLETED';
     }
 
     function coordinatorMayWriteResult(fixtureId) {
-      return fixtureOf(fixtureId).status == 'LIVE'
-        && getAfter(/databases/$(database)/documents/fixtures/$(fixtureId)).data.status == 'COMPLETED';
+      return completesInThisBatch(fixtureId)
+        && (startedBefore(fixtureId) || request.resource.data.get('result', {}).get('decidedBy', '') == 'WALKOVER');
+    }
+
+    function earlyResultCompletesFixture(fixtureId) {
+      return fixtureOf(fixtureId).status in ['SCHEDULED', 'POSTPONED']
+        && request.resource.data.get('result', {}).get('decidedBy', '') in earlyResultTypes()
+        && completesInThisBatch(fixtureId);
     }
 
     match /matchStates/{fixtureId} {
@@ -198,19 +229,15 @@ service cloud.firestore {
         && matchStateShapeIsLegal(fixtureId)
         && request.resource.data.version == 1
         && (isSuperAdmin() || !request.resource.data.keys().hasAny(['result', 'penalties']) || coordinatorMayWriteResult(fixtureId))
-        && (fixtureOf(fixtureId).status in ['LIVE', 'COMPLETED']
-            || (isSuperAdmin()
-                && fixtureOf(fixtureId).status == 'SCHEDULED'
-                && request.resource.data.get('result', {}).get('decidedBy', '') == 'WALKOVER'))
-        && (!request.resource.data.keys().hasAny(['data', 'scoringModel']) || fixtureOf(fixtureId).status == 'LIVE');
+        && (fixtureOf(fixtureId).status in ['LIVE', 'COMPLETED'] || earlyResultCompletesFixture(fixtureId))
+        && (!request.resource.data.keys().hasAny(['data', 'scoringModel', 'history']) || liveDuringBatch(fixtureId));
 
       allow update: if (isSuperAdmin() || isSportCoordinatorFor(fixtureOf(fixtureId).sportId))
         && matchStateShapeIsLegal(fixtureId)
         && request.resource.data.version == resource.data.version + 1
         && (isSuperAdmin() || !changed().hasAny(['result', 'penalties']) || coordinatorMayWriteResult(fixtureId))
-        && fixtureOf(fixtureId).status in ['LIVE', 'COMPLETED']
-
-        && (!changed().hasAny(['data', 'scoringModel']) || fixtureOf(fixtureId).status == 'LIVE');
+        && (fixtureOf(fixtureId).status in ['LIVE', 'COMPLETED'] || earlyResultCompletesFixture(fixtureId))
+        && (!changed().hasAny(['data', 'scoringModel', 'history']) || liveDuringBatch(fixtureId));
 
       allow delete: if false;
     }

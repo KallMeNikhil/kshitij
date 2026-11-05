@@ -4,7 +4,7 @@ import { auditWrite } from "../audit";
 import type { FixtureDoc } from "../../../shared/types";
 import { resolveLifecycle, type LifecycleAction } from "../../../shared/fixtureLifecycle";
 import { findVenueConflict } from "../../../shared/schedule";
-import { parseInput, lifecycleInput, resumeInput } from "../validation";
+import { parseInput, lifecycleInput, resumeInput, reinstateInput } from "../validation";
 
 async function loadAuthorized(ctx: AuthContext, fixtureId: string, transaction: string): Promise<FixtureDoc> {
   const fixture = await ctx.db.getDocument<FixtureDoc>("fixtures", fixtureId, transaction);
@@ -125,8 +125,67 @@ export async function resumeFixture(ctx: AuthContext, input: unknown) {
         },
         after: update,
       }),
-    ]);
+    ], { verifyQueries: true });
     return { ok: true, status: resolution.to };
+  } catch (err) {
+    await ctx.db.rollback(transaction);
+    throw err;
+  }
+}
+
+export async function reinstateFixture(ctx: AuthContext, input: unknown) {
+  requireSuperAdmin(ctx);
+  const { fixtureId, reason, scheduledDate, scheduledTime, venue } = parseInput(reinstateInput, input);
+  if (Boolean(scheduledDate) !== Boolean(scheduledTime)) {
+    throw new AppError(400, "SCHEDULE_DATE_AND_TIME_MUST_BE_TOGETHER", "Provide both a date and a time");
+  }
+
+  const transaction = await ctx.db.beginTransaction();
+  try {
+    const fixture = await loadAuthorized(ctx, fixtureId, transaction);
+    if (fixture.status !== "CANCELLED") {
+      throw new AppError(400, "INVALID_FIXTURE_TRANSITION", "Only a cancelled match can be reinstated");
+    }
+
+    const finalDate = scheduledDate ?? fixture.scheduledDate;
+    const finalTime = scheduledTime ?? fixture.scheduledTime;
+    const finalVenue = venue !== undefined ? venue : fixture.venue;
+    if (finalDate && finalTime && finalVenue) {
+      const sameDay = await ctx.db.runQuery<FixtureDoc>("fixtures", [{ field: "scheduledDate", op: "EQUAL", value: finalDate }], transaction);
+      const clash = findVenueConflict(sameDay.map((r) => r.data), { fixtureId, scheduledDate: finalDate, scheduledTime: finalTime, venue: finalVenue });
+      if (clash) throw new AppError(409, "SCHEDULE_CONFLICT", `${finalVenue} is already booked at ${finalTime} on ${finalDate} by ${clash}`);
+    }
+
+    const update: Record<string, unknown> = { status: "SCHEDULED" };
+    const fields = ["status", "statusReason", "resumeStatus"];
+    if (scheduledDate && scheduledTime) {
+      update.scheduledDate = scheduledDate;
+      update.scheduledTime = scheduledTime;
+      fields.push("scheduledDate", "scheduledTime");
+    }
+    if (venue !== undefined) {
+      update.venue = venue;
+      fields.push("venue");
+    }
+
+    await ctx.db.commit(
+      transaction,
+      [
+        { collection: "fixtures", id: fixtureId, data: update, mergeFields: fields },
+        auditWrite({
+          action: "reinstateFixture",
+          actorEmail: ctx.email,
+          actorRole: ctx.admin.role,
+          targetType: "fixture",
+          targetId: fixtureId,
+          reason,
+          before: { status: fixture.status, statusReason: fixture.statusReason },
+          after: update,
+        }),
+      ],
+      { verifyQueries: true }
+    );
+    return { ok: true, status: "SCHEDULED" };
   } catch (err) {
     await ctx.db.rollback(transaction);
     throw err;

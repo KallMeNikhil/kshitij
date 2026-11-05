@@ -51,14 +51,33 @@ export const updateLiveStateInput = z.object({
   data: z.record(z.string(), z.unknown()),
 });
 
+export const undoLiveStateInput = z.object({
+  fixtureId: docId,
+  expectedVersion: z.number().int().min(0),
+});
+
 export const completeMatchInput = z.object({
   fixtureId: docId,
   winnerSlot: winnerSlotSchema,
   decidedBy: z.string().min(1).max(40),
   resultSummary: z.string().max(300).default(""),
+  reason: z.string().trim().max(300).default(""),
   penalties: z
     .object({ a: z.number().int().min(0), b: z.number().int().min(0) })
     .optional(),
+});
+
+export const reopenMatchInput = z.object({
+  fixtureId: docId,
+  reason: z.string().trim().min(1).max(500),
+});
+
+export const reinstateInput = z.object({
+  fixtureId: docId,
+  reason: z.string().trim().min(1).max(REASON_MAX_LENGTH),
+  scheduledDate: dateSchema.optional(),
+  scheduledTime: timeSchema.optional(),
+  venue: z.string().trim().max(VENUE_MAX_LENGTH).optional(),
 });
 
 export const correctResultInput = z.object({

@@ -63,7 +63,15 @@ describe.skipIf(!host)("firestore.rules (emulator)", () => {
     const b = writeBatch(db);
     b.update(fx(db, F1), { status: "COMPLETED" });
     b.update(fx(db, FINAL), { [seatInto]: clean(winner) });
-    b.set(ms(db, F1), { fixtureId: F1, version: 1, result: result(winnerSlot) });
+    b.set(ms(db, F1), { fixtureId: F1, scoringModel: "BASKETBALL_POINTS", version: 1, result: result(winnerSlot) });
+    return b.commit();
+  }
+
+  function earlyEndBatch(db: ReturnType<typeof as>, decidedBy: string, extra: Record<string, unknown> = {}) {
+    const b = writeBatch(db);
+    b.update(fx(db, F1), { status: "COMPLETED", ...extra });
+    b.update(fx(db, FINAL), { slotA: clean(by(fixtures, F1).slotA) });
+    b.set(ms(db, F1), { fixtureId: F1, version: 1, result: result("A", decidedBy) });
     return b.commit();
   }
 
@@ -219,8 +227,9 @@ describe.skipIf(!host)("firestore.rules (emulator)", () => {
       await assertSucceeds(updateDoc(fx(db, F2), { status: "CANCELLED", statusReason: "ground flooded", resumeStatus: deleteField() }));
       await assertSucceeds(updateDoc(fx(db, FINAL), { status: "CANCELLED", statusReason: "ground flooded" }));
       await assertFails(updateDoc(fx(db, F1), { status: "LIVE" }));
-      await assertFails(updateDoc(fx(db, F1), { status: "SCHEDULED", statusReason: deleteField() }));
       await assertFails(updateDoc(fx(as(COORD), F1), { status: "SCHEDULED", statusReason: deleteField() }));
+      await assertFails(updateDoc(fx(db, F1), { status: "SCHEDULED" }));
+      await assertSucceeds(updateDoc(fx(db, F1), { status: "SCHEDULED", statusReason: deleteField() }));
     });
 
     it("rejects missing or oversize reasons, a wrong resume status, and stray lifecycle fields", async () => {
@@ -292,16 +301,44 @@ describe.skipIf(!host)("firestore.rules (emulator)", () => {
       await assertFails(setDoc(ms(as(COORD), F1), { fixtureId: F1, scoringModel: "BASKETBALL_POINTS", version: 2, data: { scoreA: 99 } }));
     });
 
-    it("no match state can be written for a fixture that is only SCHEDULED, except a Super Admin walkover", async () => {
+    it("no match state can be written for a fixture that is only SCHEDULED, except an early result that completes it", async () => {
       await seed();
       await assertFails(setDoc(ms(as(COORD), F2), { fixtureId: F2, version: 1, data: {} }));
       await assertFails(setDoc(ms(as(ROOT), F2), { fixtureId: F2, version: 1, result: result("A") }));
-      await assertSucceeds(setDoc(ms(as(ROOT), F2), { fixtureId: F2, version: 1, result: result("A", "WALKOVER") }));
+      await assertFails(setDoc(ms(as(ROOT), F2), { fixtureId: F2, version: 1, result: result("A", "WALKOVER") }));
+      await assertSucceeds(earlyEndBatch(as(ROOT), "ADMIN_DECISION"));
     });
 
-    it("a coordinator cannot do the walkover the Super Admin can", async () => {
+    it("a coordinator may record a walkover before play and a retirement once play started, nothing else", async () => {
       await seed();
-      await assertFails(setDoc(ms(as(COORD), F2), { fixtureId: F2, version: 1, result: result("A", "WALKOVER") }));
+      await assertFails(earlyEndBatch(as(COORD), "RETIRED"));
+      await assertFails(earlyEndBatch(as(COORD), "DISQUALIFIED"));
+      await assertFails(earlyEndBatch(as(COORD), "ADMIN_DECISION"));
+      await assertSucceeds(earlyEndBatch(as(COORD), "WALKOVER"));
+      await env.clearFirestore();
+      await seed({ [F1]: { status: "LIVE" } });
+      await assertSucceeds(earlyEndBatch(as(COORD), "RETIRED"));
+    });
+
+    it("a coordinator's score result must name the match's own scoring model", async () => {
+      const db = as(COORD);
+      const b = writeBatch(db);
+      b.update(fx(db, F1), { status: "COMPLETED" });
+      b.set(ms(db, F1), { fixtureId: F1, scoringModel: "BASKETBALL_POINTS", version: 1, result: result("A", "SETS_POINTS") });
+      await assertFails(b.commit());
+    });
+
+    it("an early result completes a postponed fixture only when its postponement fields are cleared", async () => {
+      await seed({ [F1]: { status: "POSTPONED", statusReason: "rain", resumeStatus: "SCHEDULED" } });
+      await assertFails(earlyEndBatch(as(COORD), "WALKOVER"));
+      await assertSucceeds(earlyEndBatch(as(COORD), "WALKOVER", { statusReason: deleteField(), resumeStatus: deleteField() }));
+    });
+
+    it("bounds the live score history", async () => {
+      const db = as(COORD);
+      const history = (n: number) => Array.from({ length: n }, () => ({ at: "t", by: COORD, data: {} }));
+      await assertFails(setDoc(ms(db, F1), { fixtureId: F1, scoringModel: "BASKETBALL_POINTS", version: 1, data: {}, history: history(51) }));
+      await assertSucceeds(setDoc(ms(db, F1), { fixtureId: F1, scoringModel: "BASKETBALL_POINTS", version: 1, data: {}, history: history(50) }));
     });
 
     it("nobody can delete a match state: a recorded result is history", async () => {
@@ -327,20 +364,42 @@ describe.skipIf(!host)("firestore.rules (emulator)", () => {
       await assertSucceeds(updateDoc(fx(as(ROOT), F1), { status: "SCHEDULED" }));
     });
 
-    it("cannot swap entrants on a LIVE or COMPLETED fixture, or reopen a COMPLETED one", async () => {
+    it("cannot swap entrants on a LIVE or COMPLETED fixture; only the Super Admin can reopen a COMPLETED one", async () => {
       await seed({ [F1]: { status: "LIVE" }, [F2]: { status: "COMPLETED" } });
       const db = as(ROOT);
       await assertFails(updateDoc(fx(db, F1), { slotA: { kind: "TEAM", teamId: "t4" } }));
       await assertFails(updateDoc(fx(db, F2), { slotA: { kind: "TEAM", teamId: "t4" } }));
-      await assertFails(updateDoc(fx(db, F2), { status: "LIVE" }));
+      await assertFails(updateDoc(fx(as(COORD), F2), { status: "LIVE" }));
+      await assertSucceeds(updateDoc(fx(db, F2), { status: "LIVE" }));
     });
 
-    it("can regenerate DRAFT scaffolding (overwrite incl. snapshot) but not a SCHEDULED fixture", async () => {
+    it("reopen: fixture back to LIVE, result removed and the advanced slot reset, in one batch", async () => {
+      await seed({ [F1]: { status: "COMPLETED" } });
+      await env.withSecurityRulesDisabled(async (ctx) => {
+        const db = ctx.firestore();
+        await setDoc(ms(db, F1), { fixtureId: F1, scoringModel: "BASKETBALL_POINTS", version: 3, data: { scoreA: 5, ended: true }, result: result("A") });
+        await updateDoc(fx(db, FINAL), { slotA: clean(by(fixtures, F1).slotA) });
+      });
+      const reopen = (db: ReturnType<typeof as>) => {
+        const b = writeBatch(db);
+        b.update(fx(db, F1), { status: "LIVE" });
+        b.update(fx(db, FINAL), { slotA: { kind: "FIXTURE_WINNER", fromFixtureId: F1 } });
+        b.update(ms(db, F1), { version: 4, data: { scoreA: 5 }, result: deleteField() });
+        return b.commit();
+      };
+      await assertFails(reopen(as(COORD)));
+      await assertSucceeds(reopen(as(ROOT)));
+    });
+
+    it("can regenerate DRAFT scaffolding and unstarted SCHEDULED fixtures, but not one with a match state", async () => {
       await seed({ [F1]: { status: "DRAFT" } });
       const db = as(ROOT);
       const snap = { configVersion: 2 };
       await assertSucceeds(setDoc(fx(db, F1), clean({ ...by(fixtures, F1), status: "DRAFT", matchConfigurationSnapshot: snap })));
-      await assertFails(setDoc(fx(db, F2), clean({ ...by(fixtures, F2), matchConfigurationSnapshot: snap })));
+      await assertSucceeds(setDoc(fx(db, F2), clean({ ...by(fixtures, F2), matchConfigurationSnapshot: snap })));
+      await env.withSecurityRulesDisabled(async (ctx) => setDoc(ms(ctx.firestore(), FINAL), { fixtureId: FINAL, version: 1, data: {} }));
+      await assertFails(setDoc(fx(db, FINAL), clean({ ...by(fixtures, FINAL), matchConfigurationSnapshot: snap })));
+      await assertFails(updateDoc(fx(as(COORD), F2), { matchConfigurationSnapshot: { configVersion: 3 } }));
     });
 
     it("can overwrite an auto-completed BYE fixture when regenerating, but not a played one", async () => {
