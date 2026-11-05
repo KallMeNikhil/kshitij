@@ -7,6 +7,7 @@ import { Segmented } from "../../../components/Segmented";
 import { ConfirmSheet } from "../../../components/admin/ConfirmSheet";
 import { ActionStatus, type ActionMessage } from "../../../components/admin/ActionStatus";
 import { ErrorState, LoadingState } from "../../../components/states/StateViews";
+import { RecordForm } from "../../../components/admin/RecordForm";
 
 type Kind = "sports" | "competitions" | "teams" | "participants";
 
@@ -36,6 +37,7 @@ export function ManageEntities() {
   const docsState = useEntityDocsState(kind, competitionId || null);
   const docs = docsState.data;
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [editMode, setEditMode] = useState<"form" | "json">("form");
   const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
   const [message, setMessage] = useState<ActionMessage | null>(null);
   const [filter, setFilter] = useState("");
@@ -57,6 +59,7 @@ export function ManageEntities() {
   const open = (id: string, doc: Record<string, unknown>) => {
     const copy = { ...doc };
     if (guardsConfig) delete copy.matchConfiguration;
+    setEditMode("form");
     setEditing({ id, text: JSON.stringify(copy, null, 2) });
   };
 
@@ -203,11 +206,25 @@ export function ManageEntities() {
       <AnimatePresence>
         {editing && (
           <ConfirmSheet key="edit" title={`Edit ${editing.id}`} confirmLabel="Save changes" confirmDisabled={!parsed} onConfirm={save} onClose={() => setEditing(null)}>
-            <label className="admin-field">
-              <span className="admin-field__label">Record (JSON)</span>
-              <textarea className="admin-input admin-input--code" rows={14} value={editing.text} spellCheck={false} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
-            </label>
-            {!parsed && <p className="admin-alert admin-alert--warning" role="alert">This isn't a valid JSON object yet.</p>}
+            <Segmented
+              aria-label="Editor"
+              skin="pill"
+              options={[
+                { value: "form", label: "Form" },
+                { value: "json", label: "JSON" },
+              ]}
+              value={editMode}
+              onChange={(v) => setEditMode(v as "form" | "json")}
+            />
+            {editMode === "form" && parsed ? (
+              <RecordForm record={parsed} idField={ID_FIELD[kind]} onChange={(next) => setEditing({ ...editing, text: JSON.stringify(next, null, 2) })} />
+            ) : (
+              <label className="admin-field">
+                <span className="admin-field__label">Record (JSON)</span>
+                <textarea className="admin-input admin-input--code" rows={14} value={editing.text} spellCheck={false} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
+              </label>
+            )}
+            {!parsed && <p className="admin-alert admin-alert--warning" role="alert">This isn't a valid JSON object yet{editMode === "form" ? ", so the form can't show it. Fix it in the JSON tab." : "."}</p>}
             {guardsConfig && <p className="admin-hint">Match rules are edited under Rules, not here.</p>}
           </ConfirmSheet>
         )}

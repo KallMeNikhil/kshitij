@@ -1,5 +1,7 @@
 import type { FixtureDoc } from "../../shared/types";
 import type { WriteOp } from "./firestore/client";
+import type { AuthContext } from "./auth/authorize";
+import { isGenerationOnlyFixture } from "../../shared/bracket";
 
 export function snapshotFixtures(fixtures: FixtureDoc[]): Map<string, FixtureDoc> {
   return new Map(fixtures.map((f) => [f.fixtureId, structuredClone(f)]));
@@ -19,4 +21,14 @@ export function changedFixtureWrites(before: Map<string, FixtureDoc>, after: Fix
     writes.push({ collection: "fixtures", id: f.fixtureId, data, mergeFields: keys as string[] });
   }
   return writes;
+}
+
+export async function regenerationBlocker(ctx: AuthContext, fixtures: FixtureDoc[], transaction: string): Promise<string | null> {
+  for (const f of fixtures) {
+    if (isGenerationOnlyFixture(f)) continue;
+    if (f.status !== "SCHEDULED") return `${f.fixtureId} is ${f.status.toLowerCase()}`;
+    const state = await ctx.db.getDocument<Record<string, unknown>>("matchStates", f.fixtureId, transaction);
+    if (state) return `${f.fixtureId} already has a recorded score or result`;
+  }
+  return null;
 }

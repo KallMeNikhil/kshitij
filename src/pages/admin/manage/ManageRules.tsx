@@ -4,6 +4,7 @@ import { updateCompetitionConfig, updateSportConfig } from "../../../lib/callabl
 import { describeError } from "../../../lib/describeError";
 import { ActionStatus, type ActionMessage } from "../../../components/admin/ActionStatus";
 import { defaultMatchConfigurations } from "../../../../shared/matchConfig";
+import { RulesEditor, blankConfiguration } from "../../../components/admin/rules/RulesEditor";
 
 function pendingNotes(text: string): string[] {
   try {
@@ -44,14 +45,18 @@ export function ManageRules() {
 
   const seedSport = (id: string) => {
     const sport = (sports ?? []).find((s) => s.sportId === id);
-    const seed = sport?.matchConfiguration ?? defaultMatchConfigurations[id] ?? null;
+    const seed = sport?.matchConfiguration ?? defaultMatchConfigurations[id] ?? (sport?.scoringModel ? blankConfiguration(sport.scoringModel) : null);
     setSportText(seed ? JSON.stringify(seed, null, 2) : "");
   };
 
   const seedCompetition = (id: string) => {
     const competition = (competitions ?? []).find((c) => c.competitionId === id);
     const sport = (sports ?? []).find((s) => s.sportId === sportId);
-    const seed = competition?.matchConfiguration ?? sport?.matchConfiguration ?? defaultMatchConfigurations[sportId] ?? null;
+    const base = competition?.matchConfiguration ?? sport?.matchConfiguration ?? defaultMatchConfigurations[sportId] ?? (sport?.scoringModel ? blankConfiguration(sport.scoringModel) : null);
+    const seed =
+      base && competition && base.participantModel.participantType !== competition.participantType
+        ? { ...base, participantModel: blankConfiguration(base.scoringModel, competition.participantType).participantModel }
+        : base;
     setCompetitionText(seed ? JSON.stringify(seed, null, 2) : "");
     setAcknowledge(false);
   };
@@ -117,16 +122,13 @@ export function ManageRules() {
 
       <section className="admin-card">
         <h2 className="admin-card__title">Sport rules</h2>
-        <p className="admin-hint">Default rules for the sport. Competitions inherit them unless they set their own. Changing them never affects fixtures that already exist.</p>
+        <p className="admin-hint">Default rules for the sport. Competitions inherit them unless they set their own. Fixtures keep the rules they were generated with; only fixtures generated before any rules were saved follow changes here.</p>
         {!sportId ? (
           <p className="admin-empty">Select a sport to edit its rules.</p>
         ) : (
           <>
             <PendingNotice text={sportText} />
-            <label className="admin-field">
-              <span className="admin-field__label">matchConfiguration (JSON)</span>
-              <textarea className="admin-input admin-input--code" rows={12} value={sportText} onChange={(e) => setSportText(e.target.value)} spellCheck={false} />
-            </label>
+            <RulesEditor text={sportText} onChange={setSportText} />
             <div className="admin-actions">
               <button
                 type="button"
@@ -143,19 +145,16 @@ export function ManageRules() {
 
       <section className="admin-card">
         <h2 className="admin-card__title">Competition rules</h2>
-        <p className="admin-hint">Overrides the sport default for this competition only. Blocked once any fixture is scheduled, live or completed. Regenerate the bracket afterwards so draft fixtures pick up the change.</p>
+        <p className="admin-hint">Overrides the sport default for this competition only. Allowed until the first match of the competition starts. Regenerate the bracket afterwards so existing fixtures pick up the change; saved schedules are kept.</p>
         {!competitionId ? (
           <p className="admin-empty">Select a competition to edit its rules.</p>
         ) : (
           <>
             <PendingNotice text={competitionText} />
-            <label className="admin-field">
-              <span className="admin-field__label">matchConfiguration (JSON)</span>
-              <textarea className="admin-input admin-input--code" rows={12} value={competitionText} onChange={(e) => setCompetitionText(e.target.value)} spellCheck={false} />
-            </label>
+            <RulesEditor text={competitionText} onChange={setCompetitionText} />
             <label className="admin-check">
               <input type="checkbox" checked={acknowledge} onChange={(e) => setAcknowledge(e.target.checked)} />
-              <span>Draft fixtures already exist and I want to update the rules anyway.</span>
+              <span>Fixtures already exist; I will regenerate the bracket after saving.</span>
             </label>
             <div className="admin-actions">
               <button

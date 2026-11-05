@@ -2222,3 +2222,10 @@ select.admin-input option {
     grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
   }
 }
+
+.rules-editor,
+.rules-form,
+.record-form {
+  display: grid;
+  gap: var(--space-3);
+}

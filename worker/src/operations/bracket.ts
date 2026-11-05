@@ -1,10 +1,11 @@
 import { AppError } from "../errors";
 import { AuthContext, requireSuperAdmin } from "../auth/authorize";
 import { auditWrite } from "../audit";
-import { generateBracket as buildBracket, isGenerationOnlyFixture, Entrant } from "../../../shared/bracket";
+import { generateBracket as buildBracket, Entrant } from "../../../shared/bracket";
 import { parseInput, generateBracketInput, publishBracketInput } from "../validation";
 import { validateBracketInvariants } from "../../../shared/bracketInvariants";
 import { seededRandom, separateColleges, shuffleWith } from "../../../shared/draw";
+import { regenerationBlocker } from "../fixtureWrites";
 import type { CompetitionDoc, ParticipantDoc, TeamDoc, FixtureDoc, SportDoc } from "../../../shared/types";
 
 function orderEntrants<T>(rows: T[], idOf: (row: T) => string, entrantIds?: string[]): T[] {
@@ -69,15 +70,6 @@ function isActiveEntrant(e: { status?: string }): boolean {
 
 const SCHEDULE_FIELDS = ["scheduledDate", "scheduledTime", "venue"] as const;
 
-async function regenerationBlocker(ctx: AuthContext, fixtures: FixtureDoc[], transaction: string): Promise<string | null> {
-  for (const f of fixtures) {
-    if (isGenerationOnlyFixture(f)) continue;
-    if (f.status !== "SCHEDULED") return `${f.fixtureId} is ${f.status.toLowerCase()}`;
-    const state = await ctx.db.getDocument<Record<string, unknown>>("matchStates", f.fixtureId, transaction);
-    if (state) return `${f.fixtureId} already has a recorded score or result`;
-  }
-  return null;
-}
 
 export async function generateBracket(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);

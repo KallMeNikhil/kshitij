@@ -2,7 +2,7 @@ import { AppError } from "../errors";
 import { AuthContext, requireSuperAdmin } from "../auth/authorize";
 import { auditWrite } from "../audit";
 import { matchConfigurationSchema } from "../../../shared/schemas";
-import { isGenerationOnlyFixture } from "../../../shared/bracket";
+import { regenerationBlocker } from "../fixtureWrites";
 import { isValidId } from "../../../shared/ids";
 import { parseInput, updateSportConfigInput, updateCompetitionConfigInput } from "../validation";
 import type { SportDoc, CompetitionDoc, FixtureDoc } from "../../../shared/types";
@@ -102,20 +102,19 @@ export async function updateCompetitionConfig(ctx: AuthContext, input: unknown) 
     );
 
     if (existingFixtures.length > 0) {
-      const hasOperationalFixtures = existingFixtures.some((d) => !isGenerationOnlyFixture(d.data));
-      if (hasOperationalFixtures) {
-
+      const blocker = await regenerationBlocker(ctx, existingFixtures.map((d) => d.data), transaction);
+      if (blocker) {
         throw new AppError(
           400,
           "CONFIGURATION_LOCKED_OPERATIONAL_FIXTURES_EXIST",
-          "Cannot change match configuration: fixtures beyond DRAFT already exist for this competition"
+          `Cannot change match configuration once play has started (${blocker})`
         );
       }
       if (!acknowledgeExistingFixtures) {
         throw new AppError(
           400,
           "CONFIRMATION_REQUIRED_EXISTING_DRAFT_FIXTURES",
-          "DRAFT fixtures already exist for this competition; resubmit with acknowledgeExistingFixtures=true, then regenerate the bracket so fixtures pick up the new configuration"
+          "Fixtures already exist for this competition; resubmit with acknowledgeExistingFixtures=true, then regenerate the bracket so fixtures pick up the new configuration"
         );
       }
     }

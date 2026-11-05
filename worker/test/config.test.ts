@@ -73,14 +73,19 @@ describe("updateCompetitionConfig", () => {
     matchConfiguration: basketballConfig,
   };
 
-  it("blocks changes once any fixture beyond DRAFT exists", async () => {
-    const db = fakeDb({
-      getDocument: vi.fn().mockResolvedValue(competition),
-      runQuery: vi.fn().mockResolvedValue([{ id: "f1", data: { status: "SCHEDULED" } }]),
+  it("blocks changes once play has started, but allows them on an unstarted published bracket after acknowledgement", async () => {
+    const withFixture = (data: Record<string, unknown>, matchState: unknown = null) =>
+      fakeDb({
+        getDocument: vi.fn().mockImplementation(async (collection: string) => (collection === "matchStates" ? matchState : competition)),
+        runQuery: vi.fn().mockResolvedValue([{ id: "f1", data: { fixtureId: "f1", slotA: { kind: "TEAM" }, slotB: { kind: "TEAM" }, ...data } }]),
+      });
+    const input = { competitionId: "basketball-mens", matchConfiguration: basketballConfig };
+    await expect(updateCompetitionConfig(ctxFor(withFixture({ status: "LIVE" })), input)).rejects.toMatchObject({ code: "CONFIGURATION_LOCKED_OPERATIONAL_FIXTURES_EXIST" });
+    await expect(updateCompetitionConfig(ctxFor(withFixture({ status: "SCHEDULED" }, { version: 1 })), input)).rejects.toMatchObject({
+      code: "CONFIGURATION_LOCKED_OPERATIONAL_FIXTURES_EXIST",
     });
-    await expect(
-      updateCompetitionConfig(ctxFor(db), { competitionId: "basketball-mens", matchConfiguration: basketballConfig })
-    ).rejects.toMatchObject({ code: "CONFIGURATION_LOCKED_OPERATIONAL_FIXTURES_EXIST" });
+    await expect(updateCompetitionConfig(ctxFor(withFixture({ status: "SCHEDULED" })), input)).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED_EXISTING_DRAFT_FIXTURES" });
+    await expect(updateCompetitionConfig(ctxFor(withFixture({ status: "SCHEDULED" })), { ...input, acknowledgeExistingFixtures: true })).resolves.toMatchObject({ ok: true });
   });
 
   it("requires explicit acknowledgement when DRAFT fixtures already exist", async () => {
