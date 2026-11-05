@@ -72,6 +72,15 @@ async function inTransaction<T>(ctx: AuthContext, work: (transaction: string) =>
   }
 }
 
+function assertOwnMedia(ctx: AuthContext, urls: Array<string | undefined>): void {
+  if (!ctx.origin) return;
+  for (const url of urls) {
+    if (url && new URL(url).origin !== ctx.origin) {
+      throw new AppError(400, "INVALID_MEDIA_URL", "Images must be uploaded through this site");
+    }
+  }
+}
+
 function targetIdFor(channel: Channel, ids: string[]): string {
   return ids.length === 1 ? ids[0] : channel.doc;
 }
@@ -197,6 +206,7 @@ function replaceAt<I>(items: I[], index: number, next: I): I[] {
 export async function galleryAdd(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);
   const body = parseInput(galleryAddInput, input);
+  assertOwnMedia(ctx, [body.imageUrl, body.thumbUrl]);
   return mutateList<GalleryItemDoc, { item: GalleryItemDoc }>(ctx, GALLERY, "galleryAdd", (items, now) => {
     const item: GalleryItemDoc = {
       id: crypto.randomUUID(),
@@ -223,6 +233,7 @@ export async function galleryAdd(ctx: AuthContext, input: unknown) {
 export async function galleryUpdate(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);
   const body = parseInput(galleryUpdateInput, input);
+  assertOwnMedia(ctx, [body.imageUrl, body.thumbUrl]);
   return mutateList<GalleryItemDoc, { item: GalleryItemDoc }>(ctx, GALLERY, "galleryUpdate", (items, now) => {
     const index = indexOrThrow(GALLERY, items, body.id);
     const prev = items[index];
@@ -272,6 +283,7 @@ export async function gallerySetVisibility(ctx: AuthContext, input: unknown) {
 export async function committeeAdd(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);
   const body = parseInput(committeeAddInput, input);
+  assertOwnMedia(ctx, [body.photoUrl]);
   return mutateList<CommitteeMemberDoc, { member: CommitteeMemberDoc }>(ctx, COMMITTEE, "committeeAdd", (members, now) => {
     const member: CommitteeMemberDoc = {
       id: crypto.randomUUID(),
@@ -299,6 +311,7 @@ export async function committeeAdd(ctx: AuthContext, input: unknown) {
 export async function committeeUpdate(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);
   const body = parseInput(committeeUpdateInput, input);
+  assertOwnMedia(ctx, [body.photoUrl]);
   return mutateList<CommitteeMemberDoc, { member: CommitteeMemberDoc }>(ctx, COMMITTEE, "committeeUpdate", (members, now) => {
     const index = indexOrThrow(COMMITTEE, members, body.id);
     const prev = members[index];

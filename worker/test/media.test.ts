@@ -165,14 +165,14 @@ describe("media routes", () => {
     vi.unstubAllGlobals();
   });
 
-  it("serves stored bytes publicly with the right type and immutable caching", async () => {
+  it("serves stored bytes publicly with the right type and a one-day cache", async () => {
     const { store, binding } = fakeKv();
     const key = "gallery/00000000-0000-4000-8000-000000000001-full.webp";
     store.set(key, { value: WEBP.buffer.slice(0) as ArrayBuffer, metadata: { contentType: "image/webp" } });
     const res = await handleRequest(new Request(`https://worker.example/media/${key}`), env(binding));
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("image/webp");
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=86400");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(WEBP);
     expect(mockFetch).not.toHaveBeenCalled();

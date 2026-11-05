@@ -336,3 +336,16 @@ describe("detailsUpdate", () => {
     expect(db.commit).not.toHaveBeenCalled();
   });
 });
+
+describe("media origin", () => {
+  it("only accepts images served by this Worker", async () => {
+    const { ctx } = setup({ items: [] });
+    const own = { ...ctx, origin: ORIGIN };
+    const foreign = (url: string) => url.replace(ORIGIN, "https://elsewhere.example");
+    await expect(
+      galleryAdd(own, { imageUrl: foreign(mediaUrl("gallery", "full", 3)), thumbUrl: mediaUrl("gallery", "thumb", 3), width: 10, height: 10 })
+    ).rejects.toMatchObject({ code: "INVALID_MEDIA_URL" });
+    await expect(galleryAdd(own, { imageUrl: mediaUrl("gallery", "full", 3), thumbUrl: mediaUrl("gallery", "thumb", 3), width: 10, height: 10 })).resolves.toBeTruthy();
+    await expect(committeeAdd(own, { name: "A", role: "B", photoUrl: foreign(mediaUrl("committee", "photo", 4)) })).rejects.toMatchObject({ code: "INVALID_MEDIA_URL" });
+  });
+});

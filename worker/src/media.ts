@@ -19,7 +19,7 @@ export interface MediaStore {
 }
 
 export const UPLOAD_PATH = "/api/media/upload";
-export const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+export const MEDIA_CACHE = "public, max-age=86400";
 
 function isKind(value: string | null): value is MediaKind {
   return value !== null && (MEDIA_KINDS as readonly string[]).includes(value);
@@ -97,7 +97,7 @@ export async function serveMedia(
   const contentType = stored.metadata?.contentType ?? contentTypeForKey(key) ?? "application/octet-stream";
   const headers = {
     "Content-Type": contentType,
-    "Cache-Control": IMMUTABLE_CACHE,
+    "Cache-Control": MEDIA_CACHE,
     "X-Content-Type-Options": "nosniff",
     "Cross-Origin-Resource-Policy": "cross-origin",
   };
@@ -116,4 +116,18 @@ export async function deleteMediaUrls(store: MediaStore | undefined, urls: Array
   if (keys.size === 0) return;
   if (!store) throw new AppError(500, "MEDIA_NOT_CONFIGURED", "The MEDIA KV namespace is not bound to this Worker");
   await Promise.all([...keys].map((key) => store.delete(key)));
+  const edge = typeof caches !== "undefined" ? caches.default : null;
+  if (!edge) return;
+  const origins = new Set<string>();
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      origins.add(new URL(url).origin);
+    } catch {
+      continue;
+    }
+  }
+  await Promise.all(
+    [...origins].flatMap((origin) => [...keys].map((key) => edge.delete(new Request(`${origin}${MEDIA_PATH_PREFIX}${key}`, { method: "GET" }))))
+  );
 }

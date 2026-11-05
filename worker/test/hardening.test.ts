@@ -275,7 +275,7 @@ describe("generic CRUD cannot bypass dedicated operations", () => {
   });
 
   it("locks sportId/participantType once fixtures exist, but allows the seeding-strategy edit the UI performs", async () => {
-    const db = dbWith({ docs: { "competitions/basketball-mens": competition }, fixtures: [fixture({ status: "DRAFT" })] });
+    const db = dbWith({ docs: { "competitions/basketball-mens": competition, "sports/basketball": { sportId: "basketball" } }, fixtures: [fixture({ status: "DRAFT" })] });
     await expect(upsertEntity(ctxFor(db), { collection: "competitions", id: "basketball-mens", data: { participantType: "INDIVIDUAL", teamSize: undefined } })).rejects.toBeTruthy();
     await expect(
       upsertEntity(ctxFor(db), { collection: "competitions", id: "basketball-mens", data: { tournamentConfiguration: { seeding: "RANDOM", byePolicy: "TOP_SEEDS" } } })

@@ -29,3 +29,10 @@ describe("firestore value codec", () => {
     expect(encoded.fractional).toEqual({ doubleValue: 5.5 });
   });
 });
+
+describe("firestore value decoding of console-created types", () => {
+  it("keeps timestamps and references instead of dropping them", () => {
+    const decoded = decodeFields({ createdAt: { timestampValue: "2026-10-01T00:00:00Z" }, ref: { referenceValue: "projects/p/databases/(default)/documents/a/b" } });
+    expect(decoded).toEqual({ createdAt: "2026-10-01T00:00:00Z", ref: "projects/p/databases/(default)/documents/a/b" });
+  });
+});

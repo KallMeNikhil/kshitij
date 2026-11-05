@@ -2,7 +2,8 @@ import { AppError } from "../errors";
 import { AuthContext, requireSuperAdmin } from "../auth/authorize";
 import { auditWrite } from "../audit";
 import { parseInput, manageAdminInput, upsertEntityInput, deleteEntityInput, createAnnouncementInput, deleteAnnouncementInput } from "../validation";
-import type { AdminDoc, CompetitionDoc, TeamDoc, SportDoc } from "../../../shared/types";
+import type { AdminDoc, CompetitionDoc, ParticipantDoc, TeamDoc, SportDoc } from "../../../shared/types";
+import { normalizePhone, slug } from "../../../shared/ids";
 import { sportSchema, competitionSchema, participantSchema, teamSchema } from "../../../shared/schemas";
 import { teamRosterSizeIssue } from "../../../shared/import-validator";
 import type { z } from "zod";
@@ -87,8 +88,48 @@ const ENTITY_SCHEMAS: Record<UpsertableCollection, { schema: z.ZodTypeAny; idFie
 const CONFIG_GUARDED_FIELD = "matchConfiguration";
 
 function validateTeamComposition(competition: CompetitionDoc, team: TeamDoc): void {
+  if (competition.participantType === "INDIVIDUAL") {
+    throw new AppError(400, "INVALID_COMPETITION_FOR_TEAM", "An individual competition does not take teams");
+  }
+  if (competition.participantType === "PAIR" && team.memberIds.length !== 2) {
+    throw new AppError(400, "PAIR_REQUIRES_EXACTLY_TWO_MEMBERS", "A pair needs exactly two members");
+  }
   const issue = teamRosterSizeIssue(competition, team.memberIds.length);
   if (issue) throw new AppError(400, issue.code, issue.message);
+}
+
+async function validateTeamMembers(ctx: AuthContext, team: TeamDoc, transaction: string): Promise<void> {
+  for (const memberId of team.memberIds) {
+    const member = await ctx.db.getDocument<ParticipantDoc>("participants", memberId, transaction);
+    if (!member) throw new AppError(400, "UNKNOWN_PARTICIPANT", `Participant ${memberId} does not exist`);
+    if (member.competitionId !== team.competitionId) {
+      throw new AppError(400, "MEMBER_COMPETITION_MISMATCH", `${memberId} is registered in another competition`);
+    }
+  }
+  const teams = await ctx.db.runQuery<TeamDoc>("teams", [{ field: "competitionId", op: "EQUAL", value: team.competitionId }], transaction);
+  for (const other of teams) {
+    if (other.id === team.teamId) continue;
+    const shared = other.data.memberIds.find((id) => team.memberIds.includes(id));
+    if (shared) throw new AppError(400, "PARTICIPANT_ALREADY_ON_TEAM", `${shared} is already on ${other.id}`);
+  }
+}
+
+async function validateParticipant(ctx: AuthContext, participant: ParticipantDoc, transaction: string): Promise<void> {
+  const competition = await ctx.db.getDocument<CompetitionDoc>("competitions", participant.competitionId, transaction);
+  if (!competition) throw new AppError(400, "COMPETITION_NOT_FOUND", "Participant references an unknown competition");
+  if (competition.sportId !== participant.sportId) {
+    throw new AppError(400, "SPORT_COMPETITION_MISMATCH", "sportId does not match the competition's sport");
+  }
+  const others = await ctx.db.runQuery<ParticipantDoc>("participants", [{ field: "competitionId", op: "EQUAL", value: participant.competitionId }], transaction);
+  const clash = others.find((o) => {
+    if (o.id === participant.participantId) return false;
+    try {
+      return normalizePhone(o.data.phone) === participant.phone;
+    } catch {
+      return false;
+    }
+  });
+  if (clash) throw new AppError(400, "DUPLICATE_PARTICIPANT", `${clash.id} is already registered with this phone number`);
 }
 
 function assertProtectedFieldsUnchanged(
@@ -169,6 +210,18 @@ export async function upsertEntity(ctx: AuthContext, input: unknown) {
       );
     }
     const validated = parsed.data as Record<string, unknown>;
+    if (collection === "participants") validated.phone = normalizePhone(String(validated.phone));
+    if (collection === "teams" && typeof validated.captainPhone === "string") validated.captainPhone = normalizePhone(validated.captainPhone);
+    if (collection === "sports") {
+      validated.slug = typeof validated.slug === "string" && validated.slug.trim() ? slug(validated.slug) : slug(String(validated.name));
+      const sameSlug = await ctx.db.runQuery("sports", [{ field: "slug", op: "EQUAL", value: validated.slug }], transaction);
+      if (sameSlug.some((row) => row.id !== id)) throw new AppError(400, "DUPLICATE_SLUG", `Another sport already uses the address ${validated.slug}`);
+    }
+    if (collection === "competitions") {
+      const sport = await ctx.db.getDocument<SportDoc>("sports", String(validated.sportId), transaction);
+      if (!sport) throw new AppError(400, "UNKNOWN_SPORT", "Competition references an unknown sport");
+    }
+    if (collection === "participants") await validateParticipant(ctx, validated as unknown as ParticipantDoc, transaction);
 
     if (collection === "competitions" && before) {
       await assertCompetitionStructureUnlocked(ctx, id, before, validated, transaction);
@@ -186,6 +239,7 @@ export async function upsertEntity(ctx: AuthContext, input: unknown) {
       const competition = await ctx.db.getDocument<CompetitionDoc>("competitions", team.competitionId, transaction);
       if (!competition) throw new AppError(400, "COMPETITION_NOT_FOUND", "Team references an unknown competition");
       validateTeamComposition(competition, team);
+      await validateTeamMembers(ctx, team, transaction);
     }
 
     await ctx.db.commit(transaction, [

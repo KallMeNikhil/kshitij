@@ -10,6 +10,7 @@ export interface AuthContext {
   admin: AdminDoc;
   db: FirestoreRestClient;
   media?: MediaStore;
+  origin?: string;
 }
 
 export async function requireAdmin(request: Request, env: Env): Promise<AuthContext> {
@@ -30,7 +31,7 @@ export async function requireAdmin(request: Request, env: Env): Promise<AuthCont
     throw new AppError(403, "ADMIN_INACTIVE", "Admin account is inactive");
   }
 
-  return { email, admin, db, media: env.MEDIA };
+  return { email, admin, db, media: env.MEDIA, origin: new URL(request.url).origin };
 }
 
 export function requireSuperAdmin(ctx: AuthContext): void {

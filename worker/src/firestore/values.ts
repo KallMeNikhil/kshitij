@@ -4,6 +4,10 @@ export type FirestoreValue =
   | { integerValue: string }
   | { doubleValue: number }
   | { stringValue: string }
+  | { timestampValue: string }
+  | { referenceValue: string }
+  | { geoPointValue: { latitude: number; longitude: number } }
+  | { bytesValue: string }
   | { arrayValue: { values?: FirestoreValue[] } }
   | { mapValue: { fields?: Record<string, FirestoreValue> } };
 
@@ -51,6 +55,10 @@ export function decodeValue(value: FirestoreValue | undefined): unknown {
   if ("integerValue" in value) return Number(value.integerValue);
   if ("doubleValue" in value) return value.doubleValue;
   if ("stringValue" in value) return value.stringValue;
+  if ("timestampValue" in value) return value.timestampValue;
+  if ("referenceValue" in value) return value.referenceValue;
+  if ("geoPointValue" in value) return value.geoPointValue;
+  if ("bytesValue" in value) return value.bytesValue;
   if ("arrayValue" in value) return (value.arrayValue.values ?? []).map(decodeValue);
   if ("mapValue" in value) return decodeFields(value.mapValue.fields ?? {});
   return null;

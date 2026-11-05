@@ -15,7 +15,7 @@ type Seeding = "MANUAL" | "RANDOM" | "RANKING";
 export function BracketsPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const sportsState = useSportsState();
+  const sportsState = useSportsState(true);
   const sports = sportsState.data;
   const sportId = params.get("sport") ?? "";
   const competitionId = params.get("comp") ?? "";

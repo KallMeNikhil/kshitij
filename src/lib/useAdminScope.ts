@@ -5,7 +5,7 @@ import type { SportDoc } from "../../shared/types";
 
 export function useAdminScope() {
   const { admin } = useAuth();
-  const sportsState = useSportsState();
+  const sportsState = useSportsState(true);
   const sports = sportsState.data;
   const isSuper = admin?.role === "SUPER_ADMIN";
   const scopedSports = useMemo<SportDoc[]>(() => {

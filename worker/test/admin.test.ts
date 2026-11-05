@@ -161,8 +161,12 @@ describe("upsertEntity", () => {
 
   it("accepts a team roster within the configured starters + substitutes range", async () => {
     const db = fakeDb({
-      getDocument: vi.fn().mockImplementation((collection: string) =>
-        collection === "competitions" ? basketballCompetitionWithConfig : null
+      getDocument: vi.fn().mockImplementation((collection: string, id: string) =>
+        collection === "competitions"
+          ? basketballCompetitionWithConfig
+          : collection === "participants"
+            ? { participantId: id, competitionId: basketballCompetitionWithConfig.competitionId }
+            : null
       ),
     });
     const memberIds = Array.from({ length: 10 }, (_, i) => `p${i + 1}`);
@@ -232,5 +236,44 @@ describe("deleteEntity", () => {
 
     const queriedFields = db.runQuery.mock.calls.map((c: unknown[]) => (c[1] as Array<{ field: string }>)[0].field);
     expect(queriedFields).toEqual(["sportId"]);
+  });
+});
+
+describe("upsertEntity applies the import checks", () => {
+  const competitionDoc = { competitionId: "badminton-doubles", sportId: "badminton", name: "Doubles", categoryKey: "d", participantType: "PAIR", format: "KNOCKOUT", published: false, displayOrder: 0 };
+  const store = (docs: Record<string, unknown>, rows: Record<string, unknown[]> = {}) =>
+    fakeDb({
+      getDocument: vi.fn().mockImplementation(async (collection: string, id: string) => docs[`${collection}/${id}`] ?? null),
+      runQuery: vi.fn().mockImplementation(async (collection: string) => rows[collection] ?? []),
+    });
+  const pairTeam = { sportId: "badminton", competitionId: "badminton-doubles", college: "NIT X", captainParticipantId: "badminton-doubles-p1", memberIds: ["badminton-doubles-p1", "badminton-doubles-p2"] };
+  const member = (id: string, competitionId = "badminton-doubles") => ({ participantId: id, competitionId });
+
+  it("requires pair members to exist in the same competition and not already be on another team", async () => {
+    const docs = { "competitions/badminton-doubles": competitionDoc, "participants/badminton-doubles-p1": member("badminton-doubles-p1"), "participants/badminton-doubles-p2": member("badminton-doubles-p2", "badminton-singles") };
+    await expect(upsertEntity(ctxFor(store(docs)), { collection: "teams", id: "badminton-doubles-t1", data: pairTeam })).rejects.toMatchObject({ code: "MEMBER_COMPETITION_MISMATCH" });
+    const ok = { ...docs, "participants/badminton-doubles-p2": member("badminton-doubles-p2") };
+    const taken = store(ok, { teams: [{ id: "badminton-doubles-t9", data: { memberIds: ["badminton-doubles-p2"] } }] });
+    await expect(upsertEntity(ctxFor(taken), { collection: "teams", id: "badminton-doubles-t1", data: pairTeam })).rejects.toMatchObject({ code: "PARTICIPANT_ALREADY_ON_TEAM" });
+    await expect(upsertEntity(ctxFor(store(ok)), { collection: "teams", id: "badminton-doubles-t1", data: { ...pairTeam, memberIds: ["badminton-doubles-p1"] } })).rejects.toMatchObject({ code: "PAIR_REQUIRES_EXACTLY_TWO_MEMBERS" });
+    await expect(upsertEntity(ctxFor(store(ok)), { collection: "teams", id: "badminton-doubles-t1", data: pairTeam })).resolves.toMatchObject({ ok: true });
+  });
+
+  it("normalises participant phones and rejects a duplicate in the same competition", async () => {
+    const docs = { "competitions/badminton-doubles": competitionDoc };
+    const data = { name: "Asha Rao", phone: "98765 43210", college: "NIT X", sportId: "badminton", competitionId: "badminton-doubles" };
+    const db = store(docs);
+    await upsertEntity(ctxFor(db), { collection: "participants", id: "badminton-doubles-p1", data });
+    expect(db.commit.mock.calls[0][1][0].data.phone).toBe("+919876543210");
+    const dup = store(docs, { participants: [{ id: "badminton-doubles-p7", data: { phone: "+919876543210" } }] });
+    await expect(upsertEntity(ctxFor(dup), { collection: "participants", id: "badminton-doubles-p1", data })).rejects.toMatchObject({ code: "DUPLICATE_PARTICIPANT" });
+  });
+
+  it("gives a new sport a URL slug and rejects one already taken", async () => {
+    const db = store({});
+    await upsertEntity(ctxFor(db), { collection: "sports", id: "kabaddi", data: { name: "Kabaddi", scoringModel: "BASKETBALL_POINTS" } });
+    expect(db.commit.mock.calls[0][1][0].data.slug).toBe("kabaddi");
+    const taken = store({}, { sports: [{ id: "other", data: {} }] });
+    await expect(upsertEntity(ctxFor(taken), { collection: "sports", id: "kabaddi", data: { name: "Kabaddi", scoringModel: "BASKETBALL_POINTS" } })).rejects.toMatchObject({ code: "DUPLICATE_SLUG" });
   });
 });

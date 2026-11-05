@@ -106,3 +106,10 @@ describe("extractBearerToken", () => {
     expect(extractBearerToken("Bearer abc123")).toBe("abc123");
   });
 });
+
+describe("verifyFirebaseIdToken emulator guard", () => {
+  it("never skips signature checks for a real project even if the emulator host is set", async () => {
+    const payload = validPayload({ iss: "https://securetoken.google.com/kshitij-87302", aud: "kshitij-87302" });
+    await expect(verifyFirebaseIdToken(fakeToken(payload), "kshitij-87302", "127.0.0.1:9099")).rejects.toBeInstanceOf(AppError);
+  });
+});

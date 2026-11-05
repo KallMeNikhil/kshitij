@@ -96,7 +96,7 @@ export function useSiteContentState() {
 
 const settle = <T,>(state: Listened<T>, onError: T | null): T | null => (state.error ? onError : state.data);
 
-export function useSportsState() {
+export function useSportsState(includeInactive = false) {
   return useListener<SportDoc[]>(
     (next, fail) =>
       onSnapshot(
@@ -105,12 +105,12 @@ export function useSportsState() {
           next(
             snap.docs
               .map((d) => d.data() as SportDoc)
-              .filter((s) => s.active !== false)
-              .sort((a, b) => a.displayOrder - b.displayOrder)
+              .filter((s) => includeInactive || s.active !== false)
+              .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0) || a.name.localeCompare(b.name))
           ),
         fail
       ),
-    []
+    [includeInactive]
   );
 }
 
@@ -175,7 +175,7 @@ export function useCompetitionsState(sportId: string | null, includeUnpublished 
           if (!includeUnpublished) constraints.push(where("published", "==", true));
           return onSnapshot(
             query(collection(db, "competitions"), ...constraints),
-            (snap) => next(snap.docs.map((d) => d.data() as CompetitionDoc).sort((a, b) => a.displayOrder - b.displayOrder)),
+            (snap) => next(snap.docs.map((d) => d.data() as CompetitionDoc).sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))),
             fail
           );
         }

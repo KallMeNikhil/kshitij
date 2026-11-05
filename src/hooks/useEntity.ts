@@ -61,15 +61,23 @@ export function useResolvedSlot(slot: Slot | undefined): ResolvedSlot | null {
       setResolved({ label: "TBD", kind: "TBD" });
       return;
     }
+    setResolved(null);
+    const failed = () => {
+      if (!cancelled) setResolved(null);
+    };
     if (slot.kind === "PARTICIPANT" && slot.participantId) {
-      fetchParticipant(slot.participantId).then((p) => {
-        if (!cancelled) setResolved(p ? { label: p.name, kind: "PARTICIPANT", participant: p, withdrawn: p.status === "WITHDRAWN" } : null);
-      });
+      fetchParticipant(slot.participantId)
+        .then((p) => {
+          if (!cancelled) setResolved(p ? { label: p.name, kind: "PARTICIPANT", participant: p, withdrawn: p.status === "WITHDRAWN" } : null);
+        })
+        .catch(failed);
     }
     if (slot.kind === "TEAM" && slot.teamId) {
-      fetchTeam(slot.teamId).then((t) => {
-        if (!cancelled) setResolved(t ? { label: t.teamName ?? "Team", kind: "TEAM", team: t, withdrawn: t.status === "WITHDRAWN" } : null);
-      });
+      fetchTeam(slot.teamId)
+        .then((t) => {
+          if (!cancelled) setResolved(t ? { label: t.teamName ?? t.college, kind: "TEAM", team: t, withdrawn: t.status === "WITHDRAWN" } : null);
+        })
+        .catch(failed);
     }
     return () => {
       cancelled = true;
@@ -87,11 +95,15 @@ export function useTeamRoster(teamId: string | undefined): ParticipantDoc[] {
       setRoster([]);
       return;
     }
-    fetchTeam(teamId).then(async (team) => {
-      if (!team) return;
-      const members = await Promise.all(team.memberIds.map((id) => fetchParticipant(id)));
-      if (!cancelled) setRoster(members.filter((m): m is ParticipantDoc => !!m));
-    });
+    fetchTeam(teamId)
+      .then(async (team) => {
+        if (!team) return;
+        const members = await Promise.all(team.memberIds.map((id) => fetchParticipant(id)));
+        if (!cancelled) setRoster(members.filter((m): m is ParticipantDoc => !!m));
+      })
+      .catch(() => {
+        if (!cancelled) setRoster([]);
+      });
     return () => {
       cancelled = true;
     };

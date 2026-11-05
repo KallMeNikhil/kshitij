@@ -42,6 +42,9 @@ export async function verifyFirebaseIdToken(
   authEmulatorHost?: string
 ): Promise<VerifiedIdentity> {
   if (authEmulatorHost) {
+    if (!projectId.startsWith("demo-")) {
+      throw new AppError(500, "INTERNAL", "The auth emulator can only be used with a demo- project");
+    }
     let payload: JWTPayload;
     try {
       payload = decodeJwt(idToken);
