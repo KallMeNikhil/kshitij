@@ -46,6 +46,8 @@ export function BracketsPage() {
   const seeding: Seeding = competition?.tournamentConfiguration?.seeding ?? "MANUAL";
   const drafts = fixtures?.filter((f) => f.status === "DRAFT").length ?? 0;
   const operational = fixtures?.filter((f) => f.status !== "DRAFT" && !(f.status === "COMPLETED" && (f.slotA.kind === "BYE" || f.slotB.kind === "BYE"))).length ?? 0;
+  const started = fixtures?.filter((f) => f.status === "LIVE" || f.status === "POSTPONED" || f.status === "CANCELLED" || (f.status === "COMPLETED" && f.slotA.kind !== "BYE" && f.slotB.kind !== "BYE")).length ?? 0;
+  const separate = competition?.tournamentConfiguration?.separateColleges ?? true;
   const hasBracket = (fixtures?.length ?? 0) > 0;
 
   useEffect(() => {
@@ -53,9 +55,10 @@ export function BracketsPage() {
       setSeedOrder([]);
       return;
     }
+    const active = entrants.filter((e) => e.status !== "WITHDRAWN");
     setSeedOrder((prev) => {
-      const kept = prev.filter((id) => entrants.some((e) => e.id === id));
-      return [...kept, ...entrants.filter((e) => !kept.includes(e.id)).map((e) => e.id)];
+      const kept = prev.filter((id) => active.some((e) => e.id === id));
+      return [...kept, ...active.filter((e) => !kept.includes(e.id)).map((e) => e.id)];
     });
   }, [entrants]);
 
@@ -81,12 +84,12 @@ export function BracketsPage() {
       return next;
     });
 
-  const changeSeeding = async (value: Seeding) => {
+  const changeSeeding = async (value: Seeding, separateColleges = separate) => {
     setBusy(true);
     setMessage(null);
     try {
-      await upsertEntity({ collection: "competitions", id: competitionId, data: { tournamentConfiguration: { seeding: value, byePolicy: "TOP_SEEDS" } } });
-      setMessage({ kind: "success", text: `Seeding set to ${value.toLowerCase()}.` });
+      await upsertEntity({ collection: "competitions", id: competitionId, data: { tournamentConfiguration: { seeding: value, byePolicy: "TOP_SEEDS", separateColleges } } });
+      setMessage({ kind: "success", text: value === seeding ? "Draw settings saved." : `Seeding set to ${value.toLowerCase()}.` });
     } catch (err) {
       setMessage({ kind: "error", text: `Could not change seeding. ${describeError(err)}` });
     } finally {
@@ -97,7 +100,13 @@ export function BracketsPage() {
   const runGenerate = async () => {
     const result = await generateBracket({ competitionId, ...(seedOrder.length > 0 && seeding === "MANUAL" ? { entrantIds: seedOrder } : {}) });
     setSheet(null);
-    setMessage({ kind: "success", text: `Bracket generated with ${result.data.fixtureCount} fixtures. Review it below, then publish.` });
+    const draw = result.data.drawSeed !== undefined ? ` Draw number ${result.data.drawSeed} is saved in the audit log.` : "";
+    setMessage({
+      kind: "success",
+      text: competition?.published
+        ? `Bracket regenerated with ${result.data.fixtureCount} fixtures and is live on the public site.${draw}`
+        : `Bracket generated with ${result.data.fixtureCount} fixtures.${draw} Review it below, then publish.`,
+    });
   };
 
   const runPublish = async () => {
@@ -179,19 +188,25 @@ export function BracketsPage() {
               <select id={seedingId} className="admin-input" value={seeding} disabled={busy} onChange={(e) => void changeSeeding(e.target.value as Seeding)}>
                 <option value="MANUAL">Manual: use the seed order below</option>
                 <option value="RANDOM">Random: shuffled each time you generate</option>
-                <option value="RANKING">Ranking: not supported yet, generation will be rejected</option>
               </select>
             </label>
+            {seeding === "RANDOM" && (
+              <label className="admin-check">
+                <input type="checkbox" checked={separate} disabled={busy} onChange={(e) => void changeSeeding("RANDOM", e.target.checked)} />
+                <span>Keep entrants from the same college apart in the first round where possible</span>
+              </label>
+            )}
 
             <div className="admin-actions">
-              <button type="button" className="admin-btn admin-btn--primary" disabled={busy || fixtures === null || operational > 0} onClick={() => setSheet("generate")}>
+              <button type="button" className="admin-btn admin-btn--primary" disabled={busy || fixtures === null || started > 0} onClick={() => setSheet("generate")}>
                 {hasBracket ? "Regenerate bracket" : "Generate bracket"}
               </button>
               <button type="button" className="admin-btn admin-btn--danger" disabled={busy || fixtures === null || competition.published || !hasBracket} onClick={() => setSheet("publish")}>
                 Publish
               </button>
             </div>
-            {operational > 0 && <p className="admin-hint">Regeneration is blocked once any fixture has been scheduled, started or played.</p>}
+            {started > 0 && <p className="admin-hint">Regeneration is blocked once any match has started, been played, postponed or cancelled.</p>}
+            {started === 0 && competition.published && hasBracket && <p className="admin-hint">No match has started yet, so the published bracket can still be regenerated, for example for a late entry. Saved schedules are kept.</p>}
           </section>
 
           {seeding === "MANUAL" && seedOrder.length > 0 && (

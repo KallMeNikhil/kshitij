@@ -89,8 +89,22 @@ describe("generateBracket hardening", () => {
     await expect(gen(db)).resolves.toMatchObject({ fixtureCount: 3 });
   });
 
-  it("still blocks regeneration once a real fixture was scheduled, played or cancelled", async () => {
-    for (const status of ["SCHEDULED", "LIVE", "COMPLETED", "CANCELLED"] as const) {
+  it("allows regeneration of an unstarted published bracket but blocks it once any match has a score or result", async () => {
+    const scheduled = dbWith({
+      docs: { "competitions/basketball-mens": { ...competition, published: true } },
+      fixtures: [fixture({ status: "SCHEDULED", scheduledDate: "2026-11-10", scheduledTime: "09:00", venue: "Court 1" })],
+      queries: (c) => (c === "teams" ? teamRows(team("ta"), team("tb")) : undefined),
+    });
+    await expect(gen(scheduled)).resolves.toMatchObject({ fixtureCount: 1 });
+    const written = scheduled.commit.mock.calls[0][1].find((w: { id: string }) => w.id === "basketball-mens-r1-m01");
+    expect(written.data).toMatchObject({ status: "SCHEDULED", scheduledDate: "2026-11-10", scheduledTime: "09:00", venue: "Court 1" });
+    const scored = dbWith({
+      docs: { "competitions/basketball-mens": competition, "matchStates/basketball-mens-r1-m01": { fixtureId: "x", version: 1 } },
+      fixtures: [fixture({ status: "SCHEDULED" })],
+      queries: (c) => (c === "teams" ? teamRows(team("ta"), team("tb")) : undefined),
+    });
+    await expect(gen(scored)).rejects.toMatchObject({ code: "COMPETITION_HAS_NON_DRAFT_FIXTURES" });
+    for (const status of ["LIVE", "COMPLETED", "CANCELLED", "POSTPONED"] as const) {
       const db = dbWith({
         docs: { "competitions/basketball-mens": competition },
         fixtures: [fixture({ status })],
@@ -110,7 +124,7 @@ describe("generateBracket hardening", () => {
     expect(db.commit).not.toHaveBeenCalled();
   });
 
-  it("never seeds a withdrawn entrant, and names one used in entrantIds as unusable", async () => {
+  it("never seeds a withdrawn entrant, even when the seed order still lists them", async () => {
     const rows = teamRows(team("ta"), team("tb"), team("tc", { status: "WITHDRAWN" }), team("td"));
     const db = dbWith({
       docs: { "competitions/basketball-mens": competition },
@@ -121,7 +135,11 @@ describe("generateBracket hardening", () => {
       .filter((w: { collection: string; data?: unknown }) => w.collection === "fixtures" && w.data)
       .flatMap((w: { data: { slotA: { teamId?: string }; slotB: { teamId?: string } } }) => [w.data.slotA.teamId, w.data.slotB.teamId]);
     expect(seeded).not.toContain("tc");
-    await expect(gen(db, { entrantIds: ["ta", "tc"] })).rejects.toMatchObject({ code: "UNKNOWN_ENTRANT_IDS" });
+    db.commit.mockClear();
+    await gen(db, { entrantIds: ["tc", "td", "ta", "tb"] });
+    const ordered = db.commit.mock.calls[0][1].find((w: { id: string }) => w.id === "basketball-mens-r1-m01");
+    expect(ordered.data.slotA.teamId).toBe("td");
+    await expect(gen(db, { entrantIds: ["ta", "zz"] })).rejects.toMatchObject({ code: "UNKNOWN_ENTRANT_IDS" });
   });
 
   it("regeneration never writes the same fixture document twice in one commit", async () => {

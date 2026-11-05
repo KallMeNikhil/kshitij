@@ -44,7 +44,7 @@ export function withdrawEntrants(input: { collection: "teams" | "participants"; 
 }
 
 export function generateBracket(input: { competitionId: string; entrantIds?: string[] }) {
-  return callApi<{ fixtureCount: number }>("generateBracket", input);
+  return callApi<{ fixtureCount: number; drawSeed?: number }>("generateBracket", input);
 }
 
 export function publishBracket(input: { competitionId: string }) {

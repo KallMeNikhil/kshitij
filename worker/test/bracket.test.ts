@@ -49,7 +49,7 @@ function team(id: string): TeamDoc {
 }
 
 describe("generateBracket entrant ordering", () => {
-  it("seeds entrants in Firestore query order when no entrantIds are given", async () => {
+  it("seeds entrants in a stable id order, not Firestore query order, when no entrantIds are given", async () => {
     const rows = [team("gamma"), team("alpha"), team("beta"), team("delta")].map((data) => ({ id: data.teamId, data }));
     const db = fakeDb({
       getDocument: vi.fn().mockResolvedValue(competition),
@@ -59,8 +59,8 @@ describe("generateBracket entrant ordering", () => {
     const writes = db.commit.mock.calls[0][1];
     const r1m1 = writes.find((w: { id: string }) => w.id === "basketball-mens-r1-m01");
 
-    expect(r1m1.data.slotA.teamId).toBe("gamma");
-    expect(r1m1.data.slotB.teamId).toBe("delta");
+    expect(r1m1.data.slotA.teamId).toBe("alpha");
+    expect(r1m1.data.slotB.teamId).toBe("gamma");
   });
 
   it("honors entrantIds as the explicit manual seed order, not Firestore query order", async () => {

@@ -2,7 +2,8 @@ import { AppError } from "../errors";
 import { AuthContext, requireSuperAdmin } from "../auth/authorize";
 import { auditWrite } from "../audit";
 import { chunk, type WriteOp } from "../firestore/client";
-import { validateImport, emptyStore, ExistingStore, type ImportPreview } from "../../../shared/import-validator";
+import { analyzeImport, importedTopology, validateImport, emptyStore, ExistingStore, type ImportPreview } from "../../../shared/import-validator";
+import { normalizePhone, slug } from "../../../shared/ids";
 import type {
   SportDoc,
   CompetitionDoc,
@@ -58,96 +59,93 @@ export async function previewImport(ctx: AuthContext, input: unknown) {
   return validateImport(input, store);
 }
 
-interface CommitImportInput {
-  sports?: SportDoc[];
-  competitions?: CompetitionDoc[];
-  participants?: ParticipantDoc[];
-  teams?: TeamDoc[];
-  fixtures?: FixtureDoc[];
+type Row = Record<string, unknown>;
+
+function rowsOf(input: unknown, key: string): Row[] {
+  const rows = (input as Record<string, unknown> | null)?.[key];
+  return Array.isArray(rows) ? (rows as Row[]) : [];
 }
 
-function stampNew<T extends { importBatchId?: string }>(row: T, isNew: boolean, importBatchId: string): T {
-  const { importBatchId: _supplied, ...rest } = row;
-  return (isNew ? { ...rest, importBatchId } : rest) as T;
+function supplied(parsed: Row, raw: Row | undefined, isNew: boolean): Row {
+  if (isNew || !raw) return { ...parsed };
+  return Object.fromEntries(Object.keys(raw).filter((k) => k in parsed).map((k) => [k, parsed[k]]));
 }
+
+function withoutBatch(row: Row): Row {
+  const { importBatchId: _supplied, ...rest } = row;
+  return rest;
+}
+
+const phoneOf = (value: unknown) => (typeof value === "string" && value.length > 0 ? normalizePhone(value) : value);
 
 export async function commitImport(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);
-  const payload = input as CommitImportInput;
   const transaction = await ctx.db.beginTransaction();
   const importBatchId = `import-${Date.now()}`;
   let preview: ImportPreview;
   try {
     const store = await loadExistingStore(ctx, input, transaction);
-    preview = validateImport(input, store);
-    if (!preview.ok) {
+    const analysis = analyzeImport(input, store);
+    preview = analysis.preview;
+    if (!preview.ok || !analysis.doc) {
       throw new AppError(400, "IMPORT_HAS_ERRORS", "Import has validation errors");
     }
+    const doc = analysis.doc;
     const writes: WriteOp[] = [];
+    const push = (collection: string, id: string, data: Row, mustNotExist = false) =>
+      writes.push({ collection, id, data, mergeFields: Object.keys(data), mustNotExist });
 
-    const withoutUnchangedConfig = <T extends { matchConfiguration?: unknown }>(doc: T, exists: boolean): T => {
-      if (!exists) return doc;
-      const { matchConfiguration: _unchanged, ...rest } = doc;
-      return rest as T;
-    };
-    for (const s of payload.sports ?? []) {
-      const data = withoutUnchangedConfig(s, store.sports.has(s.sportId));
-      writes.push({ collection: "sports", id: s.sportId, data, mergeFields: Object.keys(data) });
-    }
-    for (const c of payload.competitions ?? []) {
-      const data = withoutUnchangedConfig(c, store.competitions.has(c.competitionId));
-      writes.push({
-        collection: "competitions",
-        id: c.competitionId,
-        data,
-        mergeFields: Object.keys(data),
-      });
-    }
-    for (const p of payload.participants ?? []) {
-      const isNew = !store.participants.has(p.participantId);
-      const data = stampNew(p, isNew, importBatchId);
-      writes.push({
-        collection: "participants",
-        id: p.participantId,
-        data,
-        mergeFields: Object.keys(data),
-        mustNotExist: isNew,
-      });
-    }
-    for (const t of payload.teams ?? []) {
-      const isNew = !store.teams.has(t.teamId);
-      const data = stampNew(t, isNew, importBatchId);
-      writes.push({
-        collection: "teams",
-        id: t.teamId,
-        data,
-        mergeFields: Object.keys(data),
-        mustNotExist: isNew,
-      });
-    }
+    (doc.sports ?? []).forEach((sport, i) => {
+      const exists = store.sports.has(sport.sportId);
+      const data = supplied(sport as Row, rowsOf(input, "sports")[i], !exists);
+      if (exists) delete data.matchConfiguration;
+      if (!exists && !data.slug) data.slug = slug(String(data.name ?? sport.sportId));
+      push("sports", sport.sportId, data);
+    });
+    (doc.competitions ?? []).forEach((competition, i) => {
+      const exists = store.competitions.has(competition.competitionId);
+      const data = supplied(competition as Row, rowsOf(input, "competitions")[i], !exists);
+      if (exists) delete data.matchConfiguration;
+      push("competitions", competition.competitionId, data);
+    });
+    (doc.participants ?? []).forEach((participant, i) => {
+      const isNew = !store.participants.has(participant.participantId);
+      const data = withoutBatch(supplied(participant as Row, rowsOf(input, "participants")[i], isNew));
+      if ("phone" in data) data.phone = phoneOf(data.phone);
+      push("participants", participant.participantId, isNew ? { ...data, importBatchId } : data, isNew);
+    });
+    (doc.teams ?? []).forEach((team, i) => {
+      const isNew = !store.teams.has(team.teamId);
+      const data = withoutBatch(supplied(team as Row, rowsOf(input, "teams")[i], isNew));
+      if ("captainPhone" in data) data.captainPhone = phoneOf(data.captainPhone);
+      push("teams", team.teamId, isNew ? { ...data, importBatchId } : data, isNew);
+    });
 
     const competitionOf = (competitionId: string) =>
-      payload.competitions?.find((c) => c.competitionId === competitionId) ?? store.competitions.get(competitionId);
-    const sportOf = (sportId: string) =>
-      payload.sports?.find((s) => s.sportId === sportId) ?? store.sports.get(sportId);
-    for (const f of payload.fixtures ?? []) {
+      doc.competitions?.find((c) => c.competitionId === competitionId) ?? store.competitions.get(competitionId);
+    const sportOf = (sportId: string) => doc.sports?.find((s) => s.sportId === sportId) ?? store.sports.get(sportId);
+    const fixtures = doc.fixtures ?? [];
+    const byCompetition = new Map<string, typeof fixtures>();
+    for (const f of fixtures) byCompetition.set(f.competitionId, [...(byCompetition.get(f.competitionId) ?? []), f]);
+    const links = new Map<string, { nextFixtureId: string | null; nextSlot: "A" | "B" | null }>();
+    for (const [competitionId, rows] of byCompetition) {
+      const existing = [...store.fixtures.values()].filter((f) => f.competitionId === competitionId);
+      for (const [id, link] of importedTopology(rows, existing)) links.set(id, link);
+    }
+
+    fixtures.forEach((f, i) => {
       const prior = store.fixtures.get(f.fixtureId);
-      if (prior && (prior.status === "LIVE" || prior.status === "COMPLETED" || prior.status === "POSTPONED" || prior.status === "CANCELLED")) continue;
+      if (prior && ["LIVE", "COMPLETED", "POSTPONED", "CANCELLED"].includes(prior.status)) return;
       const competition = competitionOf(f.competitionId);
-      const data: Record<string, unknown> = { ...stampNew(f, !prior, importBatchId) };
+      const data = withoutBatch(supplied(f as Row, rowsOf(input, "fixtures")[i], !prior));
+      Object.assign(data, links.get(f.fixtureId));
       if (competition && !prior?.sportId) data.sportId = competition.sportId;
       if (competition && !prior) {
         const config = competition.matchConfiguration ?? sportOf(competition.sportId)?.matchConfiguration;
         if (config) data.matchConfigurationSnapshot = config;
       }
-      writes.push({
-        collection: "fixtures",
-        id: f.fixtureId,
-        data,
-        mergeFields: Object.keys(data),
-        mustNotExist: !prior,
-      });
-    }
+      push("fixtures", f.fixtureId, prior ? data : { ...data, importBatchId }, !prior);
+    });
 
     try {
       await ctx.db.commitChunked(transaction, writes, {

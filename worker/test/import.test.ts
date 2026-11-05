@@ -121,3 +121,49 @@ describe("commitImport reads and validates inside the transaction", () => {
     expect(db.commit).not.toHaveBeenCalled();
   });
 });
+
+describe("commitImport writes validated data", () => {
+  const writesOf = (db: ReturnType<typeof dbWith>) => db.commit.mock.calls[0][1] as Array<{ collection: string; id: string; data: Record<string, unknown> }>;
+
+  it("stores schema defaults, normalised phones and a DRAFT status on new rows", async () => {
+    const db = dbWith({});
+    await commitImport(ctxFor(db), payload);
+    const writes = writesOf(db);
+    expect(writes.find((w) => w.collection === "sports")!.data).toMatchObject({ displayOrder: 0, active: true, slug: "chess" });
+    expect(writes.find((w) => w.collection === "competitions")!.data).toMatchObject({ published: false, format: "KNOCKOUT", displayOrder: 0 });
+    expect(writes.find((w) => w.collection === "participants")!.data).toMatchObject({ phone: "+919876543210", status: "ACTIVE" });
+    expect(writes.find((w) => w.collection === "fixtures")!.data).toMatchObject({ status: "DRAFT", nextFixtureId: null, nextSlot: null });
+  });
+
+  it("only overwrites the fields an existing row supplies", async () => {
+    const existing = { ...payload.participants[0], phone: "+919876543210", status: "WITHDRAWN", importBatchId: "import-1" };
+    const db = dbWith({ queries: rowsFor({ participants: [existing] }) });
+    await commitImport(ctxFor(db), { schemaVersion: payload.schemaVersion, sports: payload.sports, competitions: payload.competitions, participants: [{ ...payload.participants[0], name: "Arjun S" }] });
+    const write = writesOf(db).find((w) => w.collection === "participants")!;
+    expect(write.data).not.toHaveProperty("status");
+    expect(write.data).not.toHaveProperty("importBatchId");
+    expect(write.data.name).toBe("Arjun S");
+  });
+
+  it("imports a two-round bracket and links each fixture to the next round", async () => {
+    const extra = [
+      { participantId: "chess-open-kabir-1111", name: "Kabir Rao", phone: "9000000001", college: "NIT Z", sportId: "chess", competitionId: "chess-open" },
+      { participantId: "chess-open-meera-2222", name: "Meera Iyer", phone: "9000000002", college: "NIT W", sportId: "chess", competitionId: "chess-open" },
+    ];
+    const r1m2 = {
+      fixtureId: "chess-open-r1-m02", competitionId: "chess-open", round: 1, matchNumber: 2,
+      slotA: { kind: "PARTICIPANT", participantId: extra[0].participantId }, slotB: { kind: "PARTICIPANT", participantId: extra[1].participantId },
+    };
+    const final = {
+      fixtureId: "chess-open-r2-m01", competitionId: "chess-open", round: 2, matchNumber: 1,
+      slotA: { kind: "FIXTURE_WINNER", fromFixtureId: "chess-open-r1-m01" }, slotB: { kind: "FIXTURE_WINNER", fromFixtureId: "chess-open-r1-m02" },
+    };
+    const db = dbWith({});
+    const result = (await commitImport(ctxFor(db), { ...payload, participants: [...payload.participants, ...extra], fixtures: [...payload.fixtures, r1m2, final] })) as { ok: boolean };
+    expect(result.ok).toBe(true);
+    const fixtures = writesOf(db).filter((w) => w.collection === "fixtures");
+    expect(fixtures.find((w) => w.id === "chess-open-r1-m01")!.data).toMatchObject({ nextFixtureId: "chess-open-r2-m01", nextSlot: "A" });
+    expect(fixtures.find((w) => w.id === "chess-open-r1-m02")!.data).toMatchObject({ nextFixtureId: "chess-open-r2-m01", nextSlot: "B" });
+    expect(fixtures.find((w) => w.id === "chess-open-r2-m01")!.data).toMatchObject({ nextFixtureId: null });
+  });
+});

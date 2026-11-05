@@ -4,6 +4,7 @@ export const tournamentConfigurationSchema = z
   .object({
     seeding: z.enum(["MANUAL", "RANDOM", "RANKING"]).default("MANUAL"),
     byePolicy: z.enum(["TOP_SEEDS"]).default("TOP_SEEDS"),
+    separateColleges: z.boolean().optional(),
   })
   .strict();
 

@@ -4,31 +4,37 @@ import { auditWrite } from "../audit";
 import { generateBracket as buildBracket, isGenerationOnlyFixture, Entrant } from "../../../shared/bracket";
 import { parseInput, generateBracketInput, publishBracketInput } from "../validation";
 import { validateBracketInvariants } from "../../../shared/bracketInvariants";
+import { seededRandom, separateColleges, shuffleWith } from "../../../shared/draw";
 import type { CompetitionDoc, ParticipantDoc, TeamDoc, FixtureDoc, SportDoc } from "../../../shared/types";
 
 function orderEntrants<T>(rows: T[], idOf: (row: T) => string, entrantIds?: string[]): T[] {
-  if (!entrantIds || entrantIds.length === 0) return rows;
+  const sorted = [...rows].sort((a, b) => idOf(a).localeCompare(idOf(b)));
+  if (!entrantIds || entrantIds.length === 0) return sorted;
   const byId = new Map(rows.map((r) => [idOf(r), r]));
-  return entrantIds.map((id) => byId.get(id)).filter((r): r is T => r !== undefined);
+  const listed = entrantIds.map((id) => byId.get(id)).filter((r): r is T => r !== undefined);
+  const seen = new Set(listed.map(idOf));
+  return [...listed, ...sorted.filter((r) => !seen.has(idOf(r)))];
 }
 
-function shuffle<T>(rows: T[], random: () => number = Math.random): T[] {
-  const result = [...rows];
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
+interface Seeded<T> {
+  rows: T[];
+  drawSeed?: number;
 }
 
-function applySeedingStrategy<T>(
+function applySeedingStrategy<T extends { college?: string }>(
   rows: T[],
   idOf: (row: T) => string,
   competition: CompetitionDoc,
-  entrantIds?: string[]
-): T[] {
+  entrantIds: string[] | undefined,
+  withdrawnIds: Set<string>,
+  drawSeed: number
+): Seeded<T> {
   const seeding = competition.tournamentConfiguration?.seeding ?? "MANUAL";
-  if (seeding === "RANDOM") return shuffle(rows);
+  if (seeding === "RANDOM") {
+    const shuffled = shuffleWith(orderEntrants(rows, idOf), seededRandom(drawSeed));
+    const separate = competition.tournamentConfiguration?.separateColleges ?? true;
+    return { rows: separate ? separateColleges(shuffled, (r) => r.college ?? "") : shuffled, drawSeed };
+  }
   if (seeding === "RANKING") {
     throw new AppError(
       400,
@@ -36,8 +42,9 @@ function applySeedingStrategy<T>(
       "RANKING seeding is modeled but not yet implemented (no ranking/rating data source exists for entrants). Use MANUAL (with entrantIds) or RANDOM."
     );
   }
-  assertEntrantIdsUsable(rows, idOf, entrantIds);
-  return orderEntrants(rows, idOf, entrantIds);
+  const usable = entrantIds?.filter((id) => !withdrawnIds.has(id));
+  assertEntrantIdsUsable(rows, idOf, usable);
+  return { rows: orderEntrants(rows, idOf, usable) };
 }
 
 function assertEntrantIdsUsable<T>(rows: T[], idOf: (row: T) => string, entrantIds?: string[]): void {
@@ -60,9 +67,22 @@ function isActiveEntrant(e: { status?: string }): boolean {
   return e.status !== "WITHDRAWN";
 }
 
+const SCHEDULE_FIELDS = ["scheduledDate", "scheduledTime", "venue"] as const;
+
+async function regenerationBlocker(ctx: AuthContext, fixtures: FixtureDoc[], transaction: string): Promise<string | null> {
+  for (const f of fixtures) {
+    if (isGenerationOnlyFixture(f)) continue;
+    if (f.status !== "SCHEDULED") return `${f.fixtureId} is ${f.status.toLowerCase()}`;
+    const state = await ctx.db.getDocument<Record<string, unknown>>("matchStates", f.fixtureId, transaction);
+    if (state) return `${f.fixtureId} already has a recorded score or result`;
+  }
+  return null;
+}
+
 export async function generateBracket(ctx: AuthContext, input: unknown) {
   requireSuperAdmin(ctx);
   const { competitionId, entrantIds } = parseInput(generateBracketInput, input);
+  const drawSeed = Math.floor(Math.random() * 2 ** 31);
 
   const transaction = await ctx.db.beginTransaction();
   try {
@@ -79,36 +99,33 @@ export async function generateBracket(ctx: AuthContext, input: unknown) {
       transaction
     );
 
-    const hasOperational = existingFixtures.some((d) => !isGenerationOnlyFixture(d.data));
-    if (hasOperational) {
-      throw new AppError(400, "COMPETITION_HAS_NON_DRAFT_FIXTURES", "Fixtures already scheduled");
+    const blocker = await regenerationBlocker(ctx, existingFixtures.map((d) => d.data), transaction);
+    if (blocker) {
+      throw new AppError(400, "COMPETITION_HAS_NON_DRAFT_FIXTURES", `The bracket can no longer be regenerated: ${blocker}`);
     }
 
     let entrants: Entrant[];
+    let drawSeedUsed: number | undefined;
     if (competition.participantType === "INDIVIDUAL") {
       const rows = await ctx.db.runQuery<ParticipantDoc>(
         "participants",
         [{ field: "competitionId", op: "EQUAL", value: competitionId }],
         transaction
       );
-      entrants = applySeedingStrategy(
-        rows.map((d) => d.data).filter(isActiveEntrant),
-        (p) => p.participantId,
-        competition,
-        entrantIds
-      ).map((p) => ({ id: p.participantId, kind: "PARTICIPANT" as const }));
+      const withdrawn = new Set(rows.filter((d) => !isActiveEntrant(d.data)).map((d) => d.data.participantId));
+      const seeded = applySeedingStrategy(rows.map((d) => d.data).filter(isActiveEntrant), (p) => p.participantId, competition, entrantIds, withdrawn, drawSeed);
+      drawSeedUsed = seeded.drawSeed;
+      entrants = seeded.rows.map((p) => ({ id: p.participantId, kind: "PARTICIPANT" as const }));
     } else {
       const rows = await ctx.db.runQuery<TeamDoc>(
         "teams",
         [{ field: "competitionId", op: "EQUAL", value: competitionId }],
         transaction
       );
-      entrants = applySeedingStrategy(
-        rows.map((d) => d.data).filter(isActiveEntrant),
-        (t) => t.teamId,
-        competition,
-        entrantIds
-      ).map((t) => ({ id: t.teamId, kind: "TEAM" as const }));
+      const withdrawn = new Set(rows.filter((d) => !isActiveEntrant(d.data)).map((d) => d.data.teamId));
+      const seeded = applySeedingStrategy(rows.map((d) => d.data).filter(isActiveEntrant), (t) => t.teamId, competition, entrantIds, withdrawn, drawSeed);
+      drawSeedUsed = seeded.drawSeed;
+      entrants = seeded.rows.map((t) => ({ id: t.teamId, kind: "TEAM" as const }));
     }
 
     if (entrants.length < 2) {
@@ -125,6 +142,14 @@ export async function generateBracket(ctx: AuthContext, input: unknown) {
     if (structural.length > 0) {
 
       throw new AppError(500, "BRACKET_GENERATION_INVARIANT", `Generated bracket is inconsistent: ${structural[0].message}`);
+    }
+
+    const previous = new Map(existingFixtures.map((d) => [d.id, d.data]));
+    for (const f of fixtures) {
+      if (competition.published && f.status === "DRAFT") f.status = "SCHEDULED";
+      const old = previous.get(f.fixtureId);
+      if (!old) continue;
+      for (const key of SCHEDULE_FIELDS) if (old[key] !== undefined) f[key] = old[key];
     }
 
     const writes = [];
@@ -144,11 +169,16 @@ export async function generateBracket(ctx: AuthContext, input: unknown) {
         targetType: "competition",
         targetId: competitionId,
         before: { replacedFixtureCount: existingFixtures.length },
-        after: { fixtureCount: fixtures.length, seeding: competition.tournamentConfiguration?.seeding ?? "MANUAL" },
+        after: {
+          fixtureCount: fixtures.length,
+          seeding: competition.tournamentConfiguration?.seeding ?? "MANUAL",
+          ...(drawSeedUsed !== undefined ? { drawSeed: drawSeedUsed } : {}),
+          order: entrants.map((e) => e.id),
+        },
       })
     );
-    await ctx.db.commit(transaction, writes);
-    return { fixtureCount: fixtures.length };
+    await ctx.db.commit(transaction, writes, { verifyQueries: true });
+    return { fixtureCount: fixtures.length, ...(drawSeedUsed !== undefined ? { drawSeed: drawSeedUsed } : {}) };
   } catch (err) {
     await ctx.db.rollback(transaction);
     throw err;

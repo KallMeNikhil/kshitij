@@ -1,5 +1,5 @@
 import { isGenerationOnlyFixture } from "./bracket";
-import { feederFixtureIds, validateBracketInvariants } from "./bracketInvariants";
+import { expectedNext, feederFixtureIds, validateBracketInvariants } from "./bracketInvariants";
 import { canonicalImportSchema, CanonicalImport } from "./schemas";
 import { normalizePhone, slug } from "./ids";
 import type { SportDoc, CompetitionDoc, ParticipantDoc, TeamDoc, FixtureDoc } from "./types";
@@ -48,8 +48,31 @@ export interface ImportPreview {
   ok: boolean;
 }
 
-function shallowEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+function sameFields(prior: object, next: object): boolean {
+  const keys = Object.keys(next as Record<string, unknown>);
+  const pick = (v: object) => Object.fromEntries(keys.map((k) => [k, (v as Record<string, unknown>)[k]]));
+  return stableStringify(pick(prior)) === stableStringify(pick(next));
+}
+
+const IMPORTED_FIXTURE_FIELDS = ["round", "matchNumber", "slotA", "slotB", "scheduledDate", "scheduledTime", "venue"] as const;
+
+function sameImportedFixture(prior: FixtureDoc, next: Record<string, unknown>): boolean {
+  const pick = (v: Record<string, unknown>) => Object.fromEntries(IMPORTED_FIXTURE_FIELDS.map((k) => [k, v[k]]));
+  return stableStringify(pick(prior as unknown as Record<string, unknown>)) === stableStringify(pick(next));
+}
+
+export function importedTopology(
+  fixtures: Array<Pick<FixtureDoc, "fixtureId" | "competitionId" | "round" | "matchNumber">>,
+  existing: Iterable<Pick<FixtureDoc, "fixtureId">>
+): Map<string, { nextFixtureId: string | null; nextSlot: "A" | "B" | null }> {
+  const known = new Set<string>([...existing].map((f) => f.fixtureId));
+  for (const f of fixtures) known.add(f.fixtureId);
+  const out = new Map<string, { nextFixtureId: string | null; nextSlot: "A" | "B" | null }>();
+  for (const f of fixtures) {
+    const next = expectedNext(f);
+    out.set(f.fixtureId, known.has(next.fixtureId) ? { nextFixtureId: next.fixtureId, nextSlot: next.slot } : { nextFixtureId: null, nextSlot: null });
+  }
+  return out;
 }
 
 export function teamRosterSizeIssue(
@@ -204,16 +227,19 @@ function checkImportFixtures(doc: CanonicalImport, raw: unknown, existing: Exist
   for (const competitionId of touched) {
     const current = [...existing.fixtures.values()].filter((f) => f.competitionId === competitionId);
     const merged = new Map(current.map((f) => [f.fixtureId, f]));
-    for (const f of fixtures.filter((x) => x.competitionId === competitionId)) {
+    const imported = fixtures.filter((x) => x.competitionId === competitionId);
+    const topology = importedTopology(imported, current);
+    for (const f of imported) {
       const prior = merged.get(f.fixtureId);
+      const links = topology.get(f.fixtureId)!;
       merged.set(
         f.fixtureId,
         prior
-          ? { ...prior, round: f.round, matchNumber: f.matchNumber, slotA: f.slotA, slotB: f.slotB }
+          ? { ...prior, round: f.round, matchNumber: f.matchNumber, slotA: f.slotA, slotB: f.slotB, ...links }
           : {
               fixtureId: f.fixtureId, competitionId, sportId: competitions.get(competitionId)?.sportId ?? "",
               round: f.round, matchNumber: f.matchNumber, slotA: f.slotA, slotB: f.slotB,
-              status: "DRAFT", nextFixtureId: null, nextSlot: null,
+              status: "DRAFT", ...links,
             }
       );
     }
@@ -227,6 +253,10 @@ function checkImportFixtures(doc: CanonicalImport, raw: unknown, existing: Exist
 }
 
 export function validateImport(raw: unknown, existing: ExistingStore): ImportPreview {
+  return analyzeImport(raw, existing).preview;
+}
+
+export function analyzeImport(raw: unknown, existing: ExistingStore): { preview: ImportPreview; doc: CanonicalImport | null } {
   const issues: ImportIssue[] = [];
   const counts: ImportPreview["counts"] = {
     newParticipants: 0,
@@ -254,7 +284,7 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
         severity: "error",
       });
     }
-    return { issues, counts, ok: false };
+    return { preview: { issues, counts, ok: false }, doc: null };
   }
 
   const doc: CanonicalImport = parsed.data;
@@ -288,7 +318,7 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
     }
     const prior = existing.competitions.get(c.competitionId);
     if (!prior) counts.newCompetitions++;
-    else if (!shallowEqual(prior, c)) counts.updatedCompetitions++;
+    else if (!sameFields(prior, c)) counts.updatedCompetitions++;
   });
 
   const seenPhoneByCompetition = new Map<string, Set<string>>();
@@ -330,7 +360,7 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
 
     const prior = existing.participants.get(p.participantId);
     if (!prior) counts.newParticipants++;
-    else if (!shallowEqual(prior, { ...p, phone: normalized })) counts.updatedParticipants++;
+    else if (!sameFields(prior, { ...p, phone: normalized })) counts.updatedParticipants++;
     else counts.unchangedParticipants++;
 
     participantById.set(p.participantId, { ...p, phone: normalized });
@@ -394,7 +424,7 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
 
     const prior = existing.teams.get(t.teamId);
     if (!prior) counts.newTeams++;
-    else if (!shallowEqual(prior, t)) counts.updatedTeams++;
+    else if (!sameFields(prior, t)) counts.updatedTeams++;
     else counts.unchangedTeams++;
   });
 
@@ -413,7 +443,13 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
   for (const competitionId of importedByCompetition.keys()) {
     const existingForComp = fixturesByCompetition.get(competitionId) ?? [];
     const hasNonDraft = existingForComp.some((f) => !isGenerationOnlyFixture(f));
-    if (existingForComp.length > 0 && hasNonDraft) {
+    const existingById = new Map(existingForComp.map((f) => [f.fixtureId, f]));
+    const changesFixtures = (doc.fixtures ?? []).some((f) => {
+      if (f.competitionId !== competitionId) return false;
+      const prior = existingById.get(f.fixtureId);
+      return !prior || !sameImportedFixture(prior, f);
+    });
+    if (existingForComp.length > 0 && hasNonDraft && changesFixtures) {
       issues.push({
         code: "COMPETITION_FIXTURES_NOT_REPLACEABLE",
         message: `${competitionId} has non-DRAFT fixtures; import for this competition rejected`,
@@ -427,7 +463,7 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
     const path = `fixtures[${i}]`;
     const prior = existing.fixtures.get(f.fixtureId);
     if (prior && (prior.status === "LIVE" || prior.status === "COMPLETED" || prior.status === "POSTPONED" || prior.status === "CANCELLED")) {
-      if (!shallowEqual(prior, f)) {
+      if (!sameImportedFixture(prior, f)) {
         issues.push({ code: "FIXTURE_PROTECTED", message: f.fixtureId, path, severity: "error" });
       } else {
         counts.skippedProtectedFixtures++;
@@ -435,11 +471,11 @@ export function validateImport(raw: unknown, existing: ExistingStore): ImportPre
       return;
     }
     if (!prior) counts.newFixtures++;
-    else if (!shallowEqual(prior, f)) counts.updatedFixtures++;
+    else if (!sameImportedFixture(prior, f)) counts.updatedFixtures++;
   });
 
   const ok = issues.every((iss) => iss.severity !== "error");
-  return { issues, counts, ok };
+  return { preview: { issues, counts, ok }, doc };
 }
 
 export function formatImportSummary(preview: ImportPreview): string {
