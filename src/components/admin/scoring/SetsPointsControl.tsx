@@ -10,6 +10,8 @@ import {
   type SetsPointsState,
 } from "../../../../shared/scoring/sets-points";
 import { setsPointsConfigFrom } from "../../../../shared/scoring/fromMatchConfiguration";
+import { setTarget } from "../../../../shared/scoring/sets-points";
+import { UndoButton } from "./UndoButton";
 import { useLiveStatePush } from "../../../hooks/useLiveStatePush";
 import { ControlError } from "./ControlError";
 import type { CompleteHandler } from "./types";
@@ -33,7 +35,7 @@ export function SetsPointsControl({
 }) {
   const config = setsPointsConfigFrom(matchConfiguration, sportId);
   const state = (matchState?.data as unknown as SetsPointsState) ?? emptySetsPointsState();
-  const { pending, error, push } = useLiveStatePush(fixtureId, matchState?.version ?? 0);
+  const { pending, error, push, undo } = useLiveStatePush(fixtureId, matchState?.version ?? 0);
   const [correctionNote, setCorrectionNote] = useState<string | null>(null);
   const winner = matchWinner(state, config);
   const current = state.sets[state.currentSet];
@@ -41,11 +43,16 @@ export function SetsPointsControl({
   const setsWonA = completed.filter((s) => s.a > s.b).length;
   const setsWonB = completed.filter((s) => s.b > s.a).length;
   const shownSets = state.sets.slice(0, state.currentSet + 1);
+  const target = setTarget(config, state.currentSet);
+  const pushIfChanged = (next: SetsPointsState) => {
+    if (next !== state) void push(next);
+  };
 
   return (
     <div className="control">
       <p className="control__context">
-        Set {state.currentSet + 1} of {config.bestOf} · sets won {setsWonA}–{setsWonB}
+        Set {state.currentSet + 1} of {config.bestOf} · to {target.pointsToWin}
+        {target.capPoints ? ` (cap ${target.capPoints})` : ", win by 2"} · sets won {setsWonA}–{setsWonB}
       </p>
 
       <div className="control__sets" role="table" aria-label="Set history">
@@ -81,10 +88,10 @@ export function SetsPointsControl({
       </div>
 
       <div className="control__row control__row--secondary">
-        <button type="button" className="admin-btn" disabled={pending} onClick={() => void push(correctPoint(state, "A", -1))}>
+        <button type="button" className="admin-btn" disabled={pending || !!winner || current.a === 0} onClick={() => pushIfChanged(correctPoint(state, "A", -1, config))}>
           −1 <span className="control__btn-name">{labelA}</span>
         </button>
-        <button type="button" className="admin-btn" disabled={pending} onClick={() => void push(correctPoint(state, "B", -1))}>
+        <button type="button" className="admin-btn" disabled={pending || !!winner || current.b === 0} onClick={() => pushIfChanged(correctPoint(state, "B", -1, config))}>
           −1 <span className="control__btn-name">{labelB}</span>
         </button>
       </div>
@@ -124,6 +131,7 @@ export function SetsPointsControl({
         </details>
       )}
 
+      <UndoButton matchState={matchState} pending={pending} onUndo={undo} />
       <ControlError message={error} />
 
       {winner && (

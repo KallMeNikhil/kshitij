@@ -15,7 +15,9 @@ import { EmptyState, ErrorState, LoadingState } from "./states/StateViews";
 import { compactScore } from "../lib/scoreSummary";
 import { springs } from "../motion/springs";
 import { durations } from "../motion/durations";
-import { resolveScoringModel } from "../../shared/scoring/registry";
+import { tryResolveScoringModel } from "../../shared/scoring/registry";
+import { isEarlyEnd, resultLabel } from "../../shared/results";
+import { describeFormat } from "../../shared/scoring/describeFormat";
 import { formatDateTime, roundLabel } from "../lib/format";
 
 function Entrant({
@@ -80,7 +82,8 @@ export function MatchModal({ fixtureId, onClose, context }: { fixtureId: string;
   const when = fixture ? formatDateTime(fixture.scheduledDate, fixture.scheduledTime) : null;
   const title = fixture ? `${a?.label ?? "TBD"} vs ${b?.label ?? "TBD"}` : "Match details";
   const result = matchState?.result;
-  const scoringModel = fixture ? resolveScoringModel(fixture, sport) : null;
+  const scoringModel = fixture ? tryResolveScoringModel(fixture, sport) : null;
+  const format = describeFormat(fixture?.matchConfigurationSnapshot ?? sport?.matchConfiguration ?? null);
   const matchConfiguration = fixture ? fixture.matchConfigurationSnapshot ?? sport?.matchConfiguration ?? null : null;
   const hasBye = a?.kind === "BYE" || b?.kind === "BYE";
   const scores =
@@ -187,9 +190,9 @@ export function MatchModal({ fixtureId, onClose, context }: { fixtureId: string;
                   hint={matchStateState.error ? "The score couldn't be loaded. It will appear here once it's available." : "The score will appear here as soon as scoring starts."}
                 />
               </section>
-            ) : fixture.status !== "SCHEDULED" || matchState ? (
+            ) : scoringModel && (fixture.status !== "SCHEDULED" || matchState) ? (
               <Scoreboard
-                scoringModel={scoringModel!}
+                scoringModel={scoringModel}
                 matchState={matchState}
                 labelA={a?.label ?? "TBD"}
                 labelB={b?.label ?? "TBD"}
@@ -214,8 +217,17 @@ export function MatchModal({ fixtureId, onClose, context }: { fixtureId: string;
             {result && (
               <section className="match-sheet__result" aria-label="Result">
                 <h3 className="match-sheet__heading">Result</h3>
-                <p className="match-sheet__result-summary">{result.summary}</p>
-                {result.decidedBy && <p className="match-sheet__result-meta">Decided by {result.decidedBy.toLowerCase().replace(/_/g, " ")}</p>}
+                <p className="match-sheet__result-summary">{isEarlyEnd(result.decidedBy) ? resultLabel(result.decidedBy) : result.summary}</p>
+                {isEarlyEnd(result.decidedBy) && result.summary && result.summary !== resultLabel(result.decidedBy) && (
+                  <p className="match-sheet__result-meta">{result.summary}</p>
+                )}
+              </section>
+            )}
+
+            {format && (
+              <section className="match-sheet__schedule" aria-label="Format">
+                <h3 className="match-sheet__heading">Format</h3>
+                <p className="match-sheet__result-meta">{format}</p>
               </section>
             )}
 

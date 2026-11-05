@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useResolvedSlot } from "../hooks/useEntity";
 import { usePublicLive, usePublicLiveStates, usePublicSports } from "../lib/PublicDataContext";
 import { compactScore } from "../lib/scoreSummary";
-import { resolveScoringModel } from "../../shared/scoring/registry";
+import { tryResolveScoringModel } from "../../shared/scoring/registry";
 import type { FixtureDoc, MatchStateDoc, SportDoc } from "../../shared/types";
 
 const FLUSH_DELAY_MS = 600;
@@ -29,8 +29,8 @@ function Watcher({
   useEffect(() => {
     if (!a || !b || state === undefined) return;
     const names = `${a.label} versus ${b.label}`;
-    const model = resolveScoringModel(fixture, sport);
-    const score = compactScore(model, state, false, fixture.matchConfigurationSnapshot ?? sport?.matchConfiguration ?? null);
+    const model = tryResolveScoringModel(fixture, sport);
+    const score = model && compactScore(model, state, false, fixture.matchConfigurationSnapshot ?? sport?.matchConfiguration ?? null);
     const signature = score ? `${score.a}|${score.b}` : "none";
 
     if (last.current === null) {

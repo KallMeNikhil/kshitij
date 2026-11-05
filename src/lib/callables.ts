@@ -72,14 +72,27 @@ export function updateLiveState(input: {
   return callApi<{ ok: boolean }>("updateLiveState", input);
 }
 
+export function undoLiveState(input: { fixtureId: string; expectedVersion: number }) {
+  return callApi<{ ok: boolean }>("undoLiveState", input);
+}
+
 export function completeMatch(input: {
   fixtureId: string;
   winnerSlot: "A" | "B";
   decidedBy: string;
   resultSummary: string;
+  reason?: string;
   penalties?: { a: number; b: number };
 }) {
   return callApi<{ ok: boolean }>("completeMatch", input);
+}
+
+export function reopenMatch(input: { fixtureId: string; reason: string }) {
+  return callApi<{ ok: boolean }>("reopenMatch", input);
+}
+
+export function reinstateFixture(input: { fixtureId: string; reason: string; scheduledDate?: string; scheduledTime?: string; venue?: string }) {
+  return callApi<{ ok: boolean; status: string }>("reinstateFixture", input);
 }
 
 export function correctResult(input: { fixtureId: string; winnerSlot: "A" | "B"; reason: string }) {

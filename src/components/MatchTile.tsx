@@ -7,7 +7,8 @@ import { SportIcon } from "./kshitij/SportIcon";
 import { getSportMeta } from "./kshitij/sportMeta";
 import { compactScore } from "../lib/scoreSummary";
 import { placeholderLabel } from "../lib/matchLabels";
-import { resolveScoringModel } from "../../shared/scoring/registry";
+import { tryResolveScoringModel } from "../../shared/scoring/registry";
+import { isEarlyEnd, resultLabel } from "../../shared/results";
 import { formatDateTime, roundLabel as roundLabelFor } from "../lib/format";
 import { springs } from "../motion/springs";
 import type { CSSProperties } from "react";
@@ -82,9 +83,9 @@ export function MatchTile({
   const selfSubscribe = needsState && providedState === undefined;
   const ownState = useMatchState(selfSubscribe ? fixture.fixtureId : null);
   const matchState = providedState !== undefined ? providedState : ownState;
-  const scoringModel = resolveScoringModel(fixture, sport);
+  const scoringModel = tryResolveScoringModel(fixture, sport);
   const matchConfiguration = fixture.matchConfigurationSnapshot ?? sport?.matchConfiguration ?? null;
-  const score = needsState ? compactScore(scoringModel, matchState, isCompleted, matchConfiguration) : null;
+  const score = needsState && scoringModel ? compactScore(scoringModel, matchState, isCompleted, matchConfiguration) : null;
   const terminal = isCompleted || fixture.status === "CANCELLED";
 
   const tbd = density === "result";
@@ -140,7 +141,8 @@ export function MatchTile({
 
   const separator = density === "row" || density === "result" ? <span className="match-tile__vs" aria-hidden="true">{showScore ? "–" : "vs"}</span> : null;
 
-  const summaryText = isCompleted && matchState?.result?.summary && !showScore && !hasBye ? matchState.result.summary : null;
+  const earlyLabel = isCompleted && isEarlyEnd(matchState?.result?.decidedBy) ? resultLabel(matchState?.result?.decidedBy) : null;
+  const summaryText = earlyLabel ?? (isCompleted && matchState?.result?.summary && !showScore && !hasBye ? matchState.result.summary : null);
 
   if (hasBye) {
     const other = sideA.isBye ? sideB : sideA;
@@ -194,7 +196,7 @@ export function MatchTile({
         {density === "result" ? renderSide(second[0], second[1], "b") : renderSide(sideB, "B")}
       </div>
 
-      {showSub && <div className="match-tile__sub">{score?.sub ?? summaryText}</div>}
+      {showSub && <div className="match-tile__sub">{earlyLabel ?? score?.sub ?? summaryText}</div>}
 
       {density === "result" && (
         <svg className="match-tile__tick" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

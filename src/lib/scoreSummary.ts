@@ -6,7 +6,8 @@ import { score as footballScore } from "../../shared/scoring/football-events";
 import { periodName, type BasketballState } from "../../shared/scoring/basketball-points";
 import { basketballConfigFrom } from "../../shared/scoring/fromMatchConfiguration";
 import type { MatchConfiguration } from "../../shared/matchConfig";
-import type { TennisState } from "../../shared/scoring/tennis-sets-games";
+import { tennisSummary, type TennisState } from "../../shared/scoring/tennis-sets-games";
+import { boardsSummary, boardsWon, type ResultOnlyState } from "../../shared/scoring/result-only";
 
 export interface CompactScore {
   a: string;
@@ -20,7 +21,7 @@ export function compactScore(
   isFinal = false,
   matchConfiguration?: MatchConfiguration | null
 ): CompactScore | null {
-  if (!matchState) return null;
+  if (!matchState?.data) return null;
   const data = matchState.data as Record<string, unknown>;
 
   try {
@@ -51,10 +52,11 @@ export function compactScore(
       case "FOOTBALL_EVENTS": {
         const state = data as unknown as FootballState;
         const s = footballScore(state);
+        const penalties = state.penalties ?? matchState.penalties;
         return {
           a: String(s.a),
           b: String(s.b),
-          sub: state.penalties ? `Penalties ${state.penalties.a}-${state.penalties.b}` : undefined,
+          sub: penalties ? `Penalties ${penalties.a}-${penalties.b}` : undefined,
         };
       }
       case "BASKETBALL_POINTS": {
@@ -73,15 +75,22 @@ export function compactScore(
           return {
             a: String(wonA),
             b: String(wonB),
-            sub: s.sets.filter((x) => x.completed).map((x) => `${x.gamesA}-${x.gamesB}`).join(", ") || undefined,
+            sub: tennisSummary(s) || undefined,
           };
         }
         const cur = s.sets[s.sets.length - 1];
+        const point = s.tiebreak ? `${s.tiebreak.super ? "Match tie-break" : "Tie-break"} ${s.tiebreak.a}-${s.tiebreak.b}` : `${s.currentGame.pointsA}-${s.currentGame.pointsB}`;
         return {
           a: String(cur.gamesA),
           b: String(cur.gamesB),
-          sub: `Set ${s.sets.length} · ${s.currentGame.pointsA}-${s.currentGame.pointsB}`,
+          sub: `Set ${s.sets.length} · ${point}`,
         };
+      }
+      case "RESULT_ONLY": {
+        const s = data as unknown as ResultOnlyState;
+        if (!s.boards || s.boards.length === 0) return null;
+        const won = boardsWon(s);
+        return { a: String(won.a), b: String(won.b), sub: `Boards ${boardsSummary(s)}` };
       }
       default:
         return null;

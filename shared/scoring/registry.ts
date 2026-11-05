@@ -32,11 +32,13 @@ export function sportToScoringModel(sportId: string): ScoringModel {
   return model;
 }
 
+type SportLike = Pick<SportDoc, "matchConfiguration"> & Partial<Pick<SportDoc, "scoringModel">>;
+
 export function resolveScoringModel(
   fixture: Pick<FixtureDoc, "sportId" | "matchConfigurationSnapshot">,
-  sport?: Pick<SportDoc, "matchConfiguration" | "scoringModel"> | Pick<SportDoc, "matchConfiguration"> | null
+  sport?: SportLike | null
 ): ScoringModel {
-  const registered = sport && "scoringModel" in sport ? sport.scoringModel : undefined;
+  const registered = sport?.scoringModel;
   return (
     fixture.matchConfigurationSnapshot?.scoringModel ??
     sport?.matchConfiguration?.scoringModel ??
@@ -47,7 +49,7 @@ export function resolveScoringModel(
 
 export function tryResolveScoringModel(
   fixture: Pick<FixtureDoc, "sportId" | "matchConfigurationSnapshot">,
-  sport?: Pick<SportDoc, "matchConfiguration" | "scoringModel"> | null
+  sport?: SportLike | null
 ): ScoringModel | null {
   try {
     return resolveScoringModel(fixture, sport);

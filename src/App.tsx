@@ -14,6 +14,7 @@ import { KshitijFooter } from "./components/kshitij/KshitijFooter";
 import { NotFoundState } from "./components/states/StateViews";
 import { LiveAnnouncer } from "./components/LiveAnnouncer";
 import { PublicDataProvider } from "./lib/PublicDataContext";
+import { ErrorBoundary } from "./components/states/ErrorBoundary";
 
 function NotFoundPage() {
   return <NotFoundState title="Page not found" hint="That page doesn't exist or has moved." />;
@@ -28,12 +29,14 @@ function PublicShell() {
       <ScrollProgress />
       <ScrollToTop />
       <Header />
-      <Routes location={location} key={location.pathname}>
-        <Route path="/" element={<PageTransition><HomePage /></PageTransition>} />
-        <Route path="/sports" element={<Navigate to="/#sports" replace />} />
-        <Route path="/sports/:sportSlug" element={<PageTransition><SportPage /></PageTransition>} />
-        <Route path="*" element={<PageTransition><NotFoundPage /></PageTransition>} />
-      </Routes>
+      <ErrorBoundary resetKey={location.pathname}>
+        <Routes location={location} key={location.pathname}>
+          <Route path="/" element={<PageTransition><HomePage /></PageTransition>} />
+          <Route path="/sports" element={<Navigate to="/#sports" replace />} />
+          <Route path="/sports/:sportSlug" element={<PageTransition><SportPage /></PageTransition>} />
+          <Route path="*" element={<PageTransition><NotFoundPage /></PageTransition>} />
+        </Routes>
+      </ErrorBoundary>
       <KshitijFooter />
       <ThemeToggle />
     </PublicDataProvider>
@@ -46,8 +49,8 @@ export function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
-            <Route path="/admin/*" element={<AdminApp />} />
-          <Route path="*" element={<PublicShell />} />
+            <Route path="/admin/*" element={<ErrorBoundary><AdminApp /></ErrorBoundary>} />
+            <Route path="*" element={<PublicShell />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

@@ -4,8 +4,10 @@ import { AnimatePresence } from "framer-motion";
 import { useFixtures, useFixtureState, useMatchStateState } from "../../hooks/useFirestoreData";
 import { useResolvedSlot } from "../../hooks/useEntity";
 import { useAdminScope } from "../../lib/useAdminScope";
-import { resolveScoringModel } from "../../../shared/scoring/registry";
-import { startMatch, completeMatch, correctResult, postponeFixture, resumeFixture, cancelFixture } from "../../lib/callables";
+import { tryResolveScoringModel } from "../../../shared/scoring/registry";
+import { startMatch, completeMatch, correctResult, postponeFixture, resumeFixture, cancelFixture, reopenMatch, reinstateFixture } from "../../lib/callables";
+import { COORDINATOR_RESULT_TYPES, RESULT_TYPES, RESULT_TYPE_LABELS, isEarlyEnd, resultLabel, resultTypeAllowedFrom, type ResultType } from "../../../shared/results";
+import { describeFormat } from "../../../shared/scoring/describeFormat";
 import { availableLifecycleActions, LIFECYCLE_COPY, REASON_MAX_LENGTH, type LifecycleAction } from "../../../shared/fixtureLifecycle";
 import { checkScheduleDraft } from "../../../shared/schedule";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -28,8 +30,10 @@ import type { CompleteHandler } from "../../components/admin/scoring/types";
 type Sheet =
   | { kind: "start" }
   | { kind: "complete"; winnerSlot: "A" | "B"; summary: string; penalties?: { a: number; b: number } }
-  | { kind: "walkover"; winnerSlot: "A" | "B" }
+  | { kind: "early" }
   | { kind: "correct" }
+  | { kind: "reopen" }
+  | { kind: "reinstate" }
   | { kind: "lifecycle"; action: LifecycleAction }
   | null;
 
@@ -44,7 +48,10 @@ export function LiveScoringPage() {
   const b = useResolvedSlot(fixture?.slotB);
   const siblings = useFixtures(fixture?.competitionId ?? null, true);
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [walkoverReason, setWalkoverReason] = useState("");
+  const [earlyType, setEarlyType] = useState<ResultType | null>(null);
+  const [earlyWinner, setEarlyWinner] = useState<"A" | "B" | null>(null);
+  const [earlyReason, setEarlyReason] = useState("");
+  const [adminReason, setAdminReason] = useState("");
   const [correctionWinner, setCorrectionWinner] = useState<"A" | "B" | null>(null);
   const [correctionReason, setCorrectionReason] = useState("");
   const [message, setMessage] = useState<ActionMessage | null>(null);
@@ -54,7 +61,7 @@ export function LiveScoringPage() {
   const [resumeVenue, setResumeVenue] = useState("");
 
   const sport = sports?.find((s) => s.sportId === fixture?.sportId);
-  const scoringModel = fixture ? resolveScoringModel(fixture, sport) : null;
+  const scoringModel = fixture ? tryResolveScoringModel(fixture, sport) : null;
   const matchConfiguration = fixture?.matchConfigurationSnapshot ?? sport?.matchConfiguration ?? null;
   const totalRounds = siblings ? new Set(siblings.map((f) => f.round)).size : 0;
   const labelA = a?.label ?? "Side A";
@@ -67,7 +74,10 @@ export function LiveScoringPage() {
   if (!fixtureId) return <NotFoundState title="Fixture not found" />;
   if (fixtureState.error) return <ErrorState title="This match couldn't be loaded" hint="Check your connection and try again." onRetry={fixtureState.retry} />;
   if (fixtureState.data === "MISSING") return <NotFoundState title="Match not found" hint="It may have been removed." />;
-  if (!fixture || !scoringModel) return <LoadingState label="Loading match" rows={3} />;
+  if (!fixture || !sports) return <LoadingState label="Loading match" rows={3} />;
+  if (!scoringModel) {
+    return <ErrorState title="This sport has no scoring model" hint="Set the sport's scoring model or rules in Manage before scoring this match." />;
+  }
   if (!canAccessSport(fixture.sportId)) {
     return (
       <div className="admin-page">
@@ -93,10 +103,15 @@ export function LiveScoringPage() {
   const winnerLabel = (slot: "A" | "B") => (slot === "A" ? labelA : labelB);
   const recordedWinner = matchState?.result?.winnerSlot ?? null;
   const lifecycleActions = availableLifecycleActions(fixture).filter((action) => isSuper || action !== "cancel");
+  const earlyTypes = isBye
+    ? []
+    : RESULT_TYPES.filter((t) => (isSuper || COORDINATOR_RESULT_TYPES.includes(t)) && resultTypeAllowedFrom(t, fixture.status, fixture.resumeStatus));
+  const formatText = describeFormat(matchConfiguration);
   const resumesToLive = fixture.resumeStatus === "LIVE";
   const resumeScheduleTouched = Boolean(resumeDate || resumeTime || resumeVenue.trim());
   const resumeCheck = resumeScheduleTouched ? checkScheduleDraft({ date: resumeDate, time: resumeTime, venue: resumeVenue }) : null;
   const blockedByDownstream = siblings ? downstreamStarted(siblings, fixture.fixtureId) : false;
+  const canReopen = isSuper && fixture.status === "COMPLETED" && !isBye && !!matchState?.data && !blockedByDownstream;
   const progression = nextFixture ? `Winner advances to ${roundLabel(nextFixture.round, totalRounds)}, Match ${nextFixture.matchNumber}.` : "This is the last match in the bracket.";
 
   const succeed = (text: string) => {
@@ -121,11 +136,34 @@ export function LiveScoringPage() {
     succeed(`Match completed. ${winnerLabel(sheet.winnerSlot)} advances.`);
   };
 
-  const runWalkover = async () => {
-    if (sheet?.kind !== "walkover") return;
-    await completeMatch({ fixtureId, winnerSlot: sheet.winnerSlot, decidedBy: "WALKOVER", resultSummary: walkoverReason.trim() });
-    setWalkoverReason("");
-    succeed(`Walkover recorded. ${winnerLabel(sheet.winnerSlot)} advances.`);
+  const openEarly = () => {
+    setEarlyType(earlyTypes[0] ?? null);
+    setEarlyWinner(null);
+    setEarlyReason("");
+    setSheet({ kind: "early" });
+  };
+
+  const runEarly = async () => {
+    if (!earlyType || !earlyWinner) return;
+    await completeMatch({ fixtureId, winnerSlot: earlyWinner, decidedBy: earlyType, resultSummary: "", reason: earlyReason.trim() });
+    succeed(`${RESULT_TYPE_LABELS[earlyType]} recorded. ${winnerLabel(earlyWinner)} advances.`);
+  };
+
+  const runReopen = async () => {
+    await reopenMatch({ fixtureId, reason: adminReason.trim() });
+    setAdminReason("");
+    succeed("Match reopened. Fix the score, then complete it again.");
+  };
+
+  const runReinstate = async () => {
+    await reinstateFixture({
+      fixtureId,
+      reason: adminReason.trim(),
+      ...(resumeCheck?.ok ? { scheduledDate: resumeCheck.value.scheduledDate, scheduledTime: resumeCheck.value.scheduledTime } : {}),
+      ...(resumeCheck?.ok && resumeCheck.value.venue ? { venue: resumeCheck.value.venue } : {}),
+    });
+    setAdminReason("");
+    succeed("Match reinstated and back on the schedule.");
   };
 
   const runCorrection = async () => {
@@ -169,6 +207,7 @@ export function LiveScoringPage() {
     onComplete,
     teamA: a?.team,
     teamB: b?.team,
+    matchConfiguration,
   };
 
   return (
@@ -212,6 +251,8 @@ export function LiveScoringPage() {
             </div>
           )}
 
+          {formatText && <p className="live-scoring__meta">Format: {formatText}</p>}
+
           {matchConfiguration && matchConfiguration.pending.length > 0 && (
             <div className="admin-alert admin-alert--warning" role="note">
               <strong>Rules not fully finalized for this match</strong>
@@ -232,23 +273,6 @@ export function LiveScoringPage() {
               </button>
               <p className="admin-hint">Starting puts this match live on the public site.</p>
 
-              {isSuper && (
-                <div className="live-scoring__walkover" role="group" aria-label="Record a walkover">
-                  <h2 className="admin-card__title">Record a walkover</h2>
-                  <p className="admin-hint">For a match that can't be played, for example an entrant withdrew or didn't show. Choose who advances and say why.</p>
-                  <label className="admin-field">
-                    <span className="admin-field__label">Reason (required)</span>
-                    <input className="admin-input" value={walkoverReason} maxLength={300} onChange={(e) => setWalkoverReason(e.target.value)} placeholder="e.g. opponent withdrew" />
-                  </label>
-                  <div className="control__row">
-                    {(["A", "B"] as const).map((side) => (
-                      <button key={side} type="button" className="admin-btn" disabled={!walkoverReason.trim()} onClick={() => setSheet({ kind: "walkover", winnerSlot: side })}>
-                        {winnerLabel(side)} advances
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -259,7 +283,7 @@ export function LiveScoringPage() {
               {scoringModel === "FOOTBALL_EVENTS" && <FootballControl {...controlProps} />}
               {scoringModel === "BASKETBALL_POINTS" && <BasketballControl {...controlProps} matchConfiguration={matchConfiguration} />}
               {scoringModel === "TENNIS_SETS_GAMES" && <TennisControl {...controlProps} matchConfiguration={matchConfiguration} />}
-              {scoringModel === "RESULT_ONLY" && <ResultOnlyControl {...controlProps} />}
+              {scoringModel === "RESULT_ONLY" && <ResultOnlyControl {...controlProps} sportId={fixture.sportId} />}
             </div>
           )}
 
@@ -274,7 +298,8 @@ export function LiveScoringPage() {
                     {recordedWinner ? `${winnerLabel(recordedWinner)} won` : "Completed"}
                     {matchState?.result?.summary && <small> · {matchState.result.summary}</small>}
                   </p>
-                  {matchState?.result?.decidedBy && <p className="admin-hint">Decided by {matchState.result.decidedBy.toLowerCase().replace(/_/g, " ")}.</p>}
+                  {isEarlyEnd(matchState?.result?.decidedBy) && <p className="admin-hint">{resultLabel(matchState?.result?.decidedBy)}.</p>}
+                  {matchState?.result?.reason && <p className="admin-hint">Reason: {matchState.result.reason}</p>}
                   {!isSuper ? (
                     <p className="admin-alert admin-alert--info" role="note">
                       A recorded result can only be changed by the Super Admin. Ask them if this one needs correcting.
@@ -304,8 +329,40 @@ export function LiveScoringPage() {
               <h2 className="admin-card__title">{fixture.status === "POSTPONED" ? (resumesToLive ? "Play suspended" : "Postponed") : "Cancelled"}</h2>
               {fixture.statusReason && <p className="live-scoring__result"><small>{fixture.statusReason}</small></p>}
               {fixture.status === "CANCELLED" && (
-                <p className="admin-hint">A cancelled match can't be restarted. Matches that depend on its winner can't be played until the bracket is resolved.</p>
+                <p className="admin-hint">Matches that depend on its winner wait until it is reinstated and decided.</p>
               )}
+            </div>
+          )}
+
+          {earlyTypes.length > 0 && (
+            <div className="admin-card">
+              <h2 className="admin-card__title">End match early</h2>
+              <p className="admin-hint">
+                For a match that can't finish normally: {earlyTypes.map((t) => RESULT_TYPE_LABELS[t].toLowerCase()).join(", ")}. Choose who advances and give a reason.
+              </p>
+              <button type="button" className="admin-btn" onClick={openEarly}>
+                End match early
+              </button>
+            </div>
+          )}
+
+          {canReopen && (
+            <div className="admin-card">
+              <h2 className="admin-card__title">Reopen match</h2>
+              <p className="admin-hint">Returns the match to live with its saved score so a wrong score can be fixed. The winner is taken out of the next round until it is completed again.</p>
+              <button type="button" className="admin-btn" onClick={() => { setAdminReason(""); setSheet({ kind: "reopen" }); }}>
+                Reopen match
+              </button>
+            </div>
+          )}
+
+          {isSuper && fixture.status === "CANCELLED" && !isBye && (
+            <div className="admin-card">
+              <h2 className="admin-card__title">Reinstate match</h2>
+              <p className="admin-hint">Puts the match back on the schedule. Play it, or record a walkover or organisers' decision to advance a side.</p>
+              <button type="button" className="admin-btn admin-btn--primary" onClick={() => { setAdminReason(""); setResumeDate(""); setResumeTime(""); setResumeVenue(""); setSheet({ kind: "reinstate" }); }}>
+                Reinstate match
+              </button>
             </div>
           )}
 
@@ -356,22 +413,88 @@ export function LiveScoringPage() {
             <p className="admin-hint">Completing locks the score. Results can still be corrected later until the next match starts.</p>
           </ConfirmSheet>
         )}
-        {sheet?.kind === "walkover" && (
-          <ConfirmSheet key="walkover" title="Record walkover?" tone="danger" confirmLabel={`${winnerLabel(sheet.winnerSlot)} advances`} onConfirm={runWalkover} onClose={() => setSheet(null)}>
-            <dl className="confirm-sheet__facts">
-              <div>
-                <dt>Advances</dt>
-                <dd>{winnerLabel(sheet.winnerSlot)}</dd>
-              </div>
-              <div>
-                <dt>Reason</dt>
-                <dd>{walkoverReason.trim()}</dd>
-              </div>
-              <div>
-                <dt>Progression</dt>
-                <dd>{progression}</dd>
-              </div>
-            </dl>
+        {sheet?.kind === "early" && (
+          <ConfirmSheet
+            key="early"
+            title="End this match early?"
+            tone="danger"
+            confirmLabel={earlyWinner ? `${winnerLabel(earlyWinner)} advances` : "Choose who advances"}
+            confirmDisabled={!earlyType || !earlyWinner || !earlyReason.trim()}
+            onConfirm={runEarly}
+            onClose={() => setSheet(null)}
+          >
+            <label className="admin-field">
+              <span className="admin-field__label">Result type</span>
+              <select className="admin-input" value={earlyType ?? ""} onChange={(e) => setEarlyType(e.target.value as ResultType)}>
+                {earlyTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {RESULT_TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="control__pair">
+              {(["A", "B"] as const).map((side) => (
+                <button
+                  key={side}
+                  type="button"
+                  aria-pressed={earlyWinner === side}
+                  className={`control__tap control__tap--short ${earlyWinner === side ? "is-selected" : ""}`}
+                  onClick={() => setEarlyWinner(side)}
+                >
+                  <span className="control__tap-name">{winnerLabel(side)}</span>
+                  <span className="control__tap-hint">Advances</span>
+                </button>
+              ))}
+            </div>
+            <label className="admin-field">
+              <span className="admin-field__label">Reason (kept in the record, not shown publicly)</span>
+              <input className="admin-input" value={earlyReason} maxLength={300} onChange={(e) => setEarlyReason(e.target.value)} placeholder="e.g. opponent did not arrive by 10:15" />
+            </label>
+            <p className="admin-hint">{progression} Any score recorded so far is kept.</p>
+          </ConfirmSheet>
+        )}
+        {sheet?.kind === "reopen" && (
+          <ConfirmSheet key="reopen" title="Reopen this match?" tone="danger" confirmLabel="Reopen" confirmDisabled={!adminReason.trim()} onConfirm={runReopen} onClose={() => setSheet(null)}>
+            <p className="admin-hint">The match goes back to live with its saved score. {nextFixture ? `Match ${nextFixture.matchNumber} waits for the new result.` : ""}</p>
+            <label className="admin-field">
+              <span className="admin-field__label">Reason (required)</span>
+              <input className="admin-input" value={adminReason} maxLength={500} onChange={(e) => setAdminReason(e.target.value)} placeholder="e.g. final set entered wrongly" />
+            </label>
+          </ConfirmSheet>
+        )}
+        {sheet?.kind === "reinstate" && (
+          <ConfirmSheet
+            key="reinstate"
+            title="Reinstate this match?"
+            confirmLabel="Reinstate"
+            confirmDisabled={!adminReason.trim() || Boolean(resumeCheck && !resumeCheck.ok)}
+            onConfirm={runReinstate}
+            onClose={() => setSheet(null)}
+          >
+            <label className="admin-field">
+              <span className="admin-field__label">Reason (required)</span>
+              <input className="admin-input" value={adminReason} maxLength={300} onChange={(e) => setAdminReason(e.target.value)} placeholder="e.g. cancelled by mistake, to be replayed" />
+            </label>
+            <div className="fixture-schedule__fields">
+              <label className="admin-field">
+                <span className="admin-field__label">New date</span>
+                <input className="admin-input" type="date" value={resumeDate} onChange={(e) => setResumeDate(e.target.value)} />
+              </label>
+              <label className="admin-field">
+                <span className="admin-field__label">New time</span>
+                <input className="admin-input" type="time" value={resumeTime} onChange={(e) => setResumeTime(e.target.value)} />
+              </label>
+              <label className="admin-field">
+                <span className="admin-field__label">Venue (optional)</span>
+                <input className="admin-input" value={resumeVenue} maxLength={80} onChange={(e) => setResumeVenue(e.target.value)} />
+              </label>
+            </div>
+            {resumeCheck && !resumeCheck.ok && (
+              <p className="admin-alert admin-alert--warning" role="alert">
+                {resumeCheck.error}
+              </p>
+            )}
           </ConfirmSheet>
         )}
         {sheet?.kind === "lifecycle" && (
@@ -395,7 +518,7 @@ export function LiveScoringPage() {
             )}
             {sheet.action === "cancel" && (
               <p className="admin-alert admin-alert--warning" role="note">
-                A cancelled match can't be restarted or completed. {nextFixture ? `The winner would have advanced to Match ${nextFixture.matchNumber}, which can't be played until the bracket is resolved.` : "No later match depends on it."}
+                {nextFixture ? `Match ${nextFixture.matchNumber} waits for this result. To advance a side later, reinstate this match and record a walkover or organisers' decision.` : "No later match depends on it."}
               </p>
             )}
             {sheet.action !== "resume" && (

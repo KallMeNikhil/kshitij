@@ -6,6 +6,7 @@ import {
   removeEvent,
   score,
   decideWinner,
+  UNKNOWN_PLAYER,
   type FootballState,
   type FootballEventType,
 } from "../../../../shared/scoring/football-events";
@@ -13,6 +14,9 @@ import { useLiveStatePush } from "../../../hooks/useLiveStatePush";
 import { useTeamRoster } from "../../../hooks/useEntity";
 import { ControlError } from "./ControlError";
 import { CardIcon, GoalIcon } from "./EventIcons";
+import { UndoButton } from "./UndoButton";
+import { penaltiesOnDrawFrom } from "../../../../shared/scoring/fromMatchConfiguration";
+import type { MatchConfiguration } from "../../../../shared/matchConfig";
 import type { CompleteHandler } from "./types";
 
 const EVENT_LABEL: Record<FootballEventType, string> = {
@@ -36,6 +40,7 @@ export function FootballControl({
   onComplete,
   teamA,
   teamB,
+  matchConfiguration,
 }: {
   fixtureId: string;
   labelA: string;
@@ -44,6 +49,7 @@ export function FootballControl({
   onComplete: CompleteHandler;
   teamA?: TeamDoc;
   teamB?: TeamDoc;
+  matchConfiguration?: MatchConfiguration | null;
 }) {
   const rosterA = useTeamRoster(teamA?.teamId);
   const rosterB = useTeamRoster(teamB?.teamId);
@@ -53,11 +59,13 @@ export function FootballControl({
   const [penA, setPenA] = useState("");
   const [penB, setPenB] = useState("");
   const state = (matchState?.data as unknown as FootballState) ?? emptyFootballState();
-  const { pending, error, push } = useLiveStatePush(fixtureId, matchState?.version ?? 0);
+  const { pending, error, push, undo } = useLiveStatePush(fixtureId, matchState?.version ?? 0);
+  const ended = state.ended === true;
+  const penaltiesOnDraw = penaltiesOnDrawFrom(matchConfiguration);
   const s = score(state);
   const roster = side === "A" ? rosterA : rosterB;
   const winner = decideWinner(state);
-  const playerName = (id?: string) => [...rosterA, ...rosterB].find((p) => p.participantId === id)?.name;
+  const playerName = (id?: string) => (id === UNKNOWN_PLAYER ? "Unknown player" : [...rosterA, ...rosterB].find((p) => p.participantId === id)?.name);
 
   const record = async (playerId: string) => {
     const next = addEvent(state, { id: `${Date.now()}`, type: eventType, side, playerId, minute: Number(minute) || 0 });
@@ -79,7 +87,7 @@ export function FootballControl({
       </div>
 
       <div className="control__toggle control__toggle--three" role="group" aria-label="Event type">
-        {(["GOAL", "YELLOW_CARD", "RED_CARD"] as const).map((t) => (
+        {(["GOAL", "PENALTY_GOAL", "OWN_GOAL", "YELLOW_CARD", "RED_CARD"] as const).map((t) => (
           <button key={t} type="button" aria-pressed={eventType === t} className={`control__toggle-btn ${eventType === t ? "is-active" : ""}`} onClick={() => setEventType(t)}>
             <EventIcon type={t} />
             <span>{EVENT_LABEL[t]}</span>
@@ -93,15 +101,23 @@ export function FootballControl({
       </label>
 
       <div className="control__roster" role="group" aria-label={`${side === "A" ? labelA : labelB} players`}>
-        {roster.length === 0 && <p className="control__context">No players on this roster.</p>}
+        {roster.length === 0 && <p className="control__context">No players on this roster. Use Unknown player.</p>}
         {roster.map((p) => (
-          <button key={p.participantId} type="button" className="admin-btn" disabled={pending || !minute} onClick={() => void record(p.participantId)}>
+          <button key={p.participantId} type="button" className="admin-btn" disabled={pending || ended || !minute} onClick={() => void record(p.participantId)}>
             {p.name}
           </button>
         ))}
+        <button type="button" className="admin-btn" disabled={pending || ended || !minute} onClick={() => void record(UNKNOWN_PLAYER)}>
+          Unknown player
+        </button>
       </div>
 
+      <UndoButton matchState={matchState} pending={pending} onUndo={undo} />
       <ControlError message={error} />
+
+      <button type="button" className="admin-btn admin-btn--block" disabled={pending} onClick={() => void push({ ...state, ended: !ended })}>
+        {ended ? "Resume play" : "End of match (full time)"}
+      </button>
 
       {state.events.length > 0 && (
         <ul className="control__events" aria-label="Match events">
@@ -124,13 +140,17 @@ export function FootballControl({
         </ul>
       )}
 
-      {winner && winner !== "DRAW" && (
+      {ended && winner !== "DRAW" && (
         <button type="button" className="admin-btn admin-btn--primary admin-btn--block" onClick={() => onComplete(winner, `${s.a}-${s.b}`)}>
           Complete match · {winner === "A" ? labelA : labelB} wins {s.a}-{s.b}
         </button>
       )}
 
-      {winner === "DRAW" && (
+      {ended && winner === "DRAW" && !penaltiesOnDraw && (
+        <p className="control__context">Level at {s.a}-{s.b}. This competition has no shoot-out; record the outcome under End match early.</p>
+      )}
+
+      {ended && winner === "DRAW" && penaltiesOnDraw && (
         <div className="control__penalties">
           <p className="control__context">
             Level at {s.a}-{s.b}. Enter the penalty shootout result to decide the winner.

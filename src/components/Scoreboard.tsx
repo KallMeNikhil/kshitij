@@ -6,7 +6,8 @@ import type { FootballState } from "../../shared/scoring/football-events";
 import { score as footballScore, cardsFor } from "../../shared/scoring/football-events";
 import type { BasketballState } from "../../shared/scoring/basketball-points";
 import type { TennisState } from "../../shared/scoring/tennis-sets-games";
-import type { ResultOnlyState } from "../../shared/scoring/result-only";
+import { boardsWon, type ResultOnlyState } from "../../shared/scoring/result-only";
+import { tennisSummary } from "../../shared/scoring/tennis-sets-games";
 import { CardIcon, GoalIcon } from "./admin/scoring/EventIcons";
 import { ScoreValue } from "./ScoreValue";
 import { basketballConfigFrom } from "../../shared/scoring/fromMatchConfiguration";
@@ -62,8 +63,9 @@ export function CricketScoreboard({ state, labelA, labelB }: { state: CricketInn
   );
 }
 
-export function FootballScoreboard({ state, labelA, labelB }: { state: FootballState; labelA: string; labelB: string }) {
+export function FootballScoreboard({ state, labelA, labelB, penalties: storedPenalties }: { state: FootballState; labelA: string; labelB: string; penalties?: { a: number; b: number } }) {
   const s = footballScore(state);
+  const penalties = state.penalties ?? storedPenalties;
   const cardsA = cardsFor(state, "A");
   const cardsB = cardsFor(state, "B");
   return (
@@ -75,9 +77,9 @@ export function FootballScoreboard({ state, labelA, labelB }: { state: FootballS
         </span>
         <span>{labelB}</span>
       </div>
-      {state.penalties && (
+      {penalties && (
         <p className="scoreboard__period">
-          Penalties {state.penalties.a} – {state.penalties.b}
+          Penalties {penalties.a} – {penalties.b}
         </p>
       )}
       {state.events.length > 0 && (
@@ -165,17 +167,11 @@ export function TennisScoreboard({ state, labelA, labelB }: { state: TennisState
         <span>{labelB}</span>
       </div>
       <p className="scoreboard__points">
-        Current game {state.currentGame.pointsA} – {state.currentGame.pointsB}
+        {state.tiebreak
+          ? `${state.tiebreak.super ? "Match tie-break" : "Tie-break"} ${state.tiebreak.a} – ${state.tiebreak.b}`
+          : `Current game ${state.currentGame.pointsA} – ${state.currentGame.pointsB}`}
       </p>
-      {state.sets.some((x) => x.completed) && (
-        <div className="scoreboard__sets-history">
-          Completed sets:{" "}
-          {state.sets
-            .filter((x) => x.completed)
-            .map((x) => `${x.gamesA}-${x.gamesB}`)
-            .join(", ")}
-        </div>
-      )}
+      {state.sets.some((x) => x.completed) && <div className="scoreboard__sets-history">Completed sets: {tennisSummary(state)}</div>}
     </div>
   );
 }
@@ -191,10 +187,30 @@ export function ResultOnlyScoreboard({
   labelA: string;
   labelB: string;
 }) {
-  const winner = winnerSlot ?? (state.outcome === "A" || state.outcome === "B" ? state.outcome : null);
+  const winner = winnerSlot ?? (state.outcome === "A" || state.outcome === "B" ? state.outcome : state.tieBreakWinner ?? null);
+  const boards = state.boards ?? [];
+  const won = boardsWon(state);
   return (
     <div className="scoreboard scoreboard--result-only">
-      {winner ? <span className="scoreboard__big">{winner === "A" ? labelA : labelB} wins</span> : <span className="scoreboard__pending">Result pending</span>}
+      {boards.length > 0 && (
+        <div className="scoreboard__current">
+          <span>{labelA}</span>
+          <span className="scoreboard__big">
+            <ScoreValue value={won.a} /> – <ScoreValue value={won.b} />
+          </span>
+          <span>{labelB}</span>
+        </div>
+      )}
+      {boards.length > 0 && <div className="scoreboard__sets-history">Boards: {boards.map((x) => `${x.a}-${x.b}`).join(", ")}</div>}
+      {winner ? (
+        <span className="scoreboard__big">{winner === "A" ? labelA : labelB} wins</span>
+      ) : state.outcome === "DRAW" ? (
+        <span className="scoreboard__pending">Drawn, tie-break to follow</span>
+      ) : (
+        <span className="scoreboard__pending">{boards.length > 0 ? "In progress" : "Result pending"}</span>
+      )}
+      {state.outcome === "DRAW" && state.tieBreakWinner && <p className="scoreboard__period">Drawn, decided on tie-break</p>}
+      {state.method && <p className="scoreboard__period">{state.method}</p>}
     </div>
   );
 }
@@ -213,6 +229,7 @@ export function Scoreboard({
   matchConfiguration?: MatchConfiguration | null;
 }) {
   if (!matchState) return <div className="scoreboard scoreboard--empty">Match not yet started</div>;
+  if (!matchState.data) return null;
   const data = matchState.data as Record<string, unknown>;
   switch (scoringModel) {
     case "SETS_POINTS":
@@ -220,7 +237,7 @@ export function Scoreboard({
     case "CRICKET_INNINGS":
       return <CricketScoreboard state={data as unknown as CricketInningsState} labelA={labelA} labelB={labelB} />;
     case "FOOTBALL_EVENTS":
-      return <FootballScoreboard state={data as unknown as FootballState} labelA={labelA} labelB={labelB} />;
+      return <FootballScoreboard state={data as unknown as FootballState} labelA={labelA} labelB={labelB} penalties={matchState.penalties} />;
     case "BASKETBALL_POINTS":
       return <BasketballScoreboard state={data as unknown as BasketballState} labelA={labelA} labelB={labelB} matchConfiguration={matchConfiguration} />;
     case "TENNIS_SETS_GAMES":
