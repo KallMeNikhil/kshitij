@@ -1,0 +1,179 @@
+.kshitij-footer {
+  position: relative;
+  margin-top: var(--space-6);
+  padding: var(--space-6) 0 max(calc(var(--space-6) + var(--safe-bottom)), calc(var(--theme-switch-bottom) + var(--theme-switch-height) + var(--theme-switch-gap)));
+  background: var(--footer-bg);
+  border-top: 1px solid var(--color-hairline);
+}
+
+.kshitij-footer::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+  opacity: 0.55;
+}
+
+.kshitij-footer__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.kshitij-footer__row {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: var(--space-5);
+}
+
+.kshitij-footer__brand {
+  font-family: var(--font-display);
+  font-size: clamp(3.4rem, 13.4vw, 5.4rem);
+  letter-spacing: 0.06em;
+  line-height: 0.9;
+  color: var(--color-text);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out-standard);
+}
+
+.kshitij-footer__tag {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+  width: fit-content;
+  max-width: 100%;
+}
+
+.kshitij-footer__sports {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  align-items: center;
+  width: 0;
+  min-width: 100%;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+  pointer-events: none;
+}
+
+.kshitij-footer__sports svg {
+  flex: 0 1 18px;
+  min-width: 14px;
+  height: auto;
+  aspect-ratio: 1 / 1;
+}
+
+.kshitij-footer__sports path {
+  fill: none;
+}
+
+.kshitij-footer__note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono-score);
+  font-size: var(--text-meta);
+  letter-spacing: 0.14em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.kshitij-footer__contact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono-score);
+  font-size: var(--text-meta);
+  letter-spacing: 0.06em;
+}
+
+.kshitij-footer__contact a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  font-size: var(--text-meta);
+  transition: color var(--duration-fast) var(--ease-out-standard);
+}
+
+.kshitij-footer__contact a:hover,
+.kshitij-footer__brand:hover {
+  color: var(--color-accent-strong);
+}
+
+.kshitij-footer__aside {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.kshitij-footer__top {
+  align-self: center;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--footer-top-size);
+  height: var(--footer-top-size);
+  min-width: var(--footer-top-size);
+  min-height: var(--footer-top-size);
+  padding: 0;
+  border-radius: 50%;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out-standard), border-color var(--duration-fast) var(--ease-out-standard);
+}
+
+.kshitij-footer__top:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.kshitij-footer__top:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@media (min-width: 720px) {
+  .kshitij-footer__row {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-6);
+  }
+
+  .kshitij-footer__aside {
+    justify-content: flex-end;
+    gap: var(--space-5);
+  }
+
+  .kshitij-footer__aside--contact {
+    align-self: center;
+  }
+
+  .kshitij-footer__contact {
+    align-items: flex-end;
+    text-align: right;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kshitij-footer__brand,
+  .kshitij-footer__contact a,
+  .kshitij-footer__top {
+    transition: none;
+  }
+}

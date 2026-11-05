@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+.env.production
+.wrangler
+.dev.vars
+firebase/emulator-data
+firebase-debug.log*
+firestore-debug.log
+ui-debug.log
+*.tsbuildinfo
+.DS_Store

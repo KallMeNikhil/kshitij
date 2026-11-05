@@ -1,0 +1,272 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function adminDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.token.email.lower())).data;
+    }
+
+    function isActiveAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.token.email.lower()))
+        && adminDoc().active == true;
+    }
+
+    function isSuperAdmin() {
+      return isActiveAdmin() && adminDoc().role == 'SUPER_ADMIN';
+    }
+
+    function isSportCoordinatorFor(sportId) {
+      return isActiveAdmin()
+        && adminDoc().role == 'SPORT_COORDINATOR'
+        && sportId in adminDoc().sportIds;
+    }
+
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function configChangeIsVersioned() {
+      return !changed().hasAny(['matchConfiguration'])
+        || request.resource.data.matchConfiguration.get('configVersion', 0)
+            > resource.data.get('matchConfiguration', {}).get('configVersion', 0);
+    }
+
+    function entrantStatusIsLegal() {
+      return request.resource.data.get('status', 'ACTIVE') == resource.data.get('status', 'ACTIVE')
+        || (resource.data.get('status', 'ACTIVE') == 'ACTIVE' && request.resource.data.status == 'WITHDRAWN');
+    }
+
+    match /sports/{sportId} {
+      allow read: if true;
+      allow create, delete: if isSuperAdmin();
+      allow update: if isSuperAdmin() && configChangeIsVersioned();
+    }
+
+    match /competitions/{competitionId} {
+      allow read: if resource.data.published == true || isActiveAdmin();
+      allow create: if isSuperAdmin() && request.resource.data.get('published', false) == false;
+      allow delete: if isSuperAdmin();
+
+      allow update: if isSuperAdmin()
+        && configChangeIsVersioned()
+        && (request.resource.data.get('published', false) == resource.data.get('published', false)
+            || (resource.data.get('published', false) == false && request.resource.data.published == true));
+    }
+
+    match /participants/{participantId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() && request.resource.data.get('status', 'ACTIVE') == 'ACTIVE';
+      allow update: if isSuperAdmin() && entrantStatusIsLegal();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /teams/{teamId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() && request.resource.data.get('status', 'ACTIVE') == 'ACTIVE';
+      allow update: if isSuperAdmin() && entrantStatusIsLegal();
+      allow delete: if isSuperAdmin();
+    }
+
+    function fixtureImmutableFieldsUntouched() {
+      return !changed().hasAny(['fixtureId', 'competitionId', 'matchConfigurationSnapshot'])
+        && (!changed().hasAny(['sportId']) || !('sportId' in resource.data));
+    }
+
+    function fixtureIsGenerationScaffolding() {
+      return resource.data.status == 'DRAFT'
+        || (resource.data.status == 'COMPLETED'
+            && (resource.data.slotA.kind == 'BYE' || resource.data.slotB.kind == 'BYE'));
+    }
+
+    function fixtureStatusChangeIsLegal() {
+      return request.resource.data.status == resource.data.status
+        || (resource.data.status == 'DRAFT' && request.resource.data.status in ['SCHEDULED', 'COMPLETED'])
+        || (resource.data.status == 'SCHEDULED' && request.resource.data.status in ['LIVE', 'COMPLETED', 'POSTPONED', 'CANCELLED'])
+        || (resource.data.status == 'LIVE' && request.resource.data.status in ['COMPLETED', 'POSTPONED', 'CANCELLED'])
+        || (resource.data.status == 'POSTPONED' && request.resource.data.status in ['SCHEDULED', 'LIVE', 'CANCELLED']);
+    }
+
+    function lifecycleReasonIsValid() {
+      return request.resource.data.get('statusReason', '') is string
+        && request.resource.data.get('statusReason', '').size() > 0
+        && request.resource.data.get('statusReason', '').size() <= 300;
+    }
+
+    function lifecycleChangeIsCoherent() {
+      return request.resource.data.status == resource.data.status
+        ? !changed().hasAny(['statusReason', 'resumeStatus'])
+        : (request.resource.data.status == 'POSTPONED'
+            ? lifecycleReasonIsValid() && request.resource.data.get('resumeStatus', '') == resource.data.status
+            : (request.resource.data.status == 'CANCELLED'
+                ? lifecycleReasonIsValid() && !('resumeStatus' in request.resource.data)
+                : (resource.data.status == 'POSTPONED'
+                    ? request.resource.data.status == resource.data.get('resumeStatus', 'SCHEDULED')
+                      && !('statusReason' in request.resource.data)
+                      && !('resumeStatus' in request.resource.data)
+                    : !changed().hasAny(['statusReason', 'resumeStatus']))));
+    }
+
+    function feederId(side) {
+      let m = side == 'A' ? 2 * request.resource.data.matchNumber - 1 : 2 * request.resource.data.matchNumber;
+      return request.resource.data.competitionId + '-r' + string(request.resource.data.round - 1)
+        + '-m' + (m < 10 ? '0' : '') + string(m);
+    }
+
+    function slotIsFeederWinner(side) {
+      return get(/databases/$(database)/documents/fixtures/$(feederId(side))).data.nextFixtureId == request.resource.data.fixtureId
+        && get(/databases/$(database)/documents/fixtures/$(feederId(side))).data.nextSlot == side
+        && (side == 'A' ? request.resource.data.slotA : request.resource.data.slotB)
+          == (getAfter(/databases/$(database)/documents/matchStates/$(feederId(side))).data.result.winnerSlot == 'A'
+              ? get(/databases/$(database)/documents/fixtures/$(feederId(side))).data.slotA
+              : get(/databases/$(database)/documents/fixtures/$(feederId(side))).data.slotB);
+    }
+
+    function coordinatorSlotsAreLegal() {
+      return (!changed().hasAny(['slotA']) || (request.resource.data.round > 1 && slotIsFeederWinner('A')))
+        && (!changed().hasAny(['slotB']) || (request.resource.data.round > 1 && slotIsFeederWinner('B')));
+    }
+
+    function coordinatorResultIsRecorded(fid) {
+      return existsAfter(/databases/$(database)/documents/matchStates/$(fid))
+        && getAfter(/databases/$(database)/documents/matchStates/$(fid)).data.result.winnerSlot in ['A', 'B'];
+    }
+
+    function coordinatorStatusChangeIsAllowed() {
+      return request.resource.data.status != 'CANCELLED'
+        && (request.resource.data.status != 'COMPLETED'
+            || (resource.data.status == 'LIVE' && coordinatorResultIsRecorded(resource.data.fixtureId)));
+    }
+
+    function coordinatorFixtureUpdateIsLegal() {
+      return changed().hasOnly(['status', 'statusReason', 'resumeStatus', 'slotA', 'slotB', 'scheduledDate', 'scheduledTime', 'venue', 'displaySummary'])
+        && (resource.data.status in ['DRAFT', 'SCHEDULED']
+            || (resource.data.status == 'LIVE' && changed().hasOnly(['status', 'statusReason', 'resumeStatus']))
+            || (resource.data.status == 'POSTPONED' && changed().hasOnly(['status', 'statusReason', 'resumeStatus', 'scheduledDate', 'scheduledTime', 'venue'])))
+        && !(resource.data.status == 'DRAFT' && request.resource.data.status == 'SCHEDULED')
+        && coordinatorSlotsAreLegal()
+        && coordinatorStatusChangeIsAllowed();
+    }
+
+    match /fixtures/{fixtureId} {
+      allow read: if resource.data.status != 'DRAFT' || isActiveAdmin();
+      allow create: if isSuperAdmin();
+
+      allow delete: if isSuperAdmin() && fixtureIsGenerationScaffolding();
+      allow update: if (isSuperAdmin() && fixtureIsGenerationScaffolding()
+            && !(request.resource.data.status in ['POSTPONED', 'CANCELLED']))
+        || (fixtureImmutableFieldsUntouched()
+            && fixtureStatusChangeIsLegal()
+            && lifecycleChangeIsCoherent()
+
+            && (!changed().hasAny(['slotA', 'slotB']) || resource.data.status in ['DRAFT', 'SCHEDULED'])
+            && (isSuperAdmin()
+                || (isSportCoordinatorFor(resource.data.sportId) && coordinatorFixtureUpdateIsLegal())));
+    }
+
+    function fixtureOf(fixtureId) {
+      return get(/databases/$(database)/documents/fixtures/$(fixtureId)).data;
+    }
+
+    function matchStateShapeIsLegal(fixtureId) {
+      return request.resource.data.keys().hasOnly(['fixtureId', 'scoringModel', 'version', 'data', 'result', 'penalties'])
+        && request.resource.data.fixtureId == fixtureId
+        && request.resource.data.version is int
+        && (!('result' in request.resource.data)
+            || (request.resource.data.result.winnerSlot in ['A', 'B']
+                && request.resource.data.result.decidedBy is string))
+
+        && (isSuperAdmin()
+            || !('result' in request.resource.data)
+            || !(request.resource.data.result.decidedBy in ['WALKOVER', 'ADMIN_OVERRIDE']));
+    }
+
+    function coordinatorMayWriteResult(fixtureId) {
+      return fixtureOf(fixtureId).status == 'LIVE'
+        && getAfter(/databases/$(database)/documents/fixtures/$(fixtureId)).data.status == 'COMPLETED';
+    }
+
+    match /matchStates/{fixtureId} {
+      allow read: if true;
+
+      allow create: if (isSuperAdmin() || isSportCoordinatorFor(fixtureOf(fixtureId).sportId))
+        && matchStateShapeIsLegal(fixtureId)
+        && request.resource.data.version == 1
+        && (isSuperAdmin() || !request.resource.data.keys().hasAny(['result', 'penalties']) || coordinatorMayWriteResult(fixtureId))
+        && (fixtureOf(fixtureId).status in ['LIVE', 'COMPLETED']
+            || (isSuperAdmin()
+                && fixtureOf(fixtureId).status == 'SCHEDULED'
+                && request.resource.data.get('result', {}).get('decidedBy', '') == 'WALKOVER'))
+        && (!request.resource.data.keys().hasAny(['data', 'scoringModel']) || fixtureOf(fixtureId).status == 'LIVE');
+
+      allow update: if (isSuperAdmin() || isSportCoordinatorFor(fixtureOf(fixtureId).sportId))
+        && matchStateShapeIsLegal(fixtureId)
+        && request.resource.data.version == resource.data.version + 1
+        && (isSuperAdmin() || !changed().hasAny(['result', 'penalties']) || coordinatorMayWriteResult(fixtureId))
+        && fixtureOf(fixtureId).status in ['LIVE', 'COMPLETED']
+
+        && (!changed().hasAny(['data', 'scoringModel']) || fixtureOf(fixtureId).status == 'LIVE');
+
+      allow delete: if false;
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    function siteContentShapeIsLegal(docId) {
+      return (docId == 'gallery'
+          && request.resource.data.keys().hasOnly(['items', 'updatedAt', 'updatedBy'])
+          && request.resource.data.get('items', null) is list
+          && request.resource.data.items.size() <= 200)
+        || (docId == 'committee'
+          && request.resource.data.keys().hasOnly(['members', 'updatedAt', 'updatedBy'])
+          && request.resource.data.get('members', null) is list
+          && request.resource.data.members.size() <= 100)
+        || (docId == 'details'
+          && request.resource.data.keys().hasOnly(['eventLabel', 'tagline', 'footerNote', 'heroTitle', 'contact', 'updatedAt', 'updatedBy'])
+          && (!('contact' in request.resource.data) || request.resource.data.contact is map));
+    }
+
+    match /siteContent/{docId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() && siteContentShapeIsLegal(docId);
+      allow delete: if false;
+    }
+
+    function adminShapeIsLegal(email) {
+      return request.resource.data.email == email
+        && request.resource.data.role in ['SUPER_ADMIN', 'SPORT_COORDINATOR']
+        && request.resource.data.active is bool
+        && request.resource.data.sportIds is list;
+    }
+
+    match /admins/{email} {
+      allow read: if isSignedIn() && (request.auth.token.email.lower() == email || isSuperAdmin());
+      allow create: if isSuperAdmin()
+        && adminShapeIsLegal(email)
+        && request.resource.data.role == 'SPORT_COORDINATOR';
+      allow update: if isSuperAdmin()
+        && adminShapeIsLegal(email)
+        && request.resource.data.role == resource.data.role
+        && (resource.data.role == 'SPORT_COORDINATOR' || request.resource.data.active == true);
+      allow delete: if false;
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isSuperAdmin();
+      allow create: if isActiveAdmin()
+        && request.resource.data.keys().hasOnly(['action', 'actorEmail', 'actorRole', 'targetType', 'targetId', 'reason', 'before', 'after', 'createdAt'])
+        && request.resource.data.keys().hasAll(['action', 'actorEmail', 'targetType', 'targetId', 'createdAt'])
+        && request.resource.data.actorEmail == request.auth.token.email.lower()
+        && request.resource.data.get('actorRole', adminDoc().role) == adminDoc().role;
+      allow update, delete: if false;
+    }
+  }
+}

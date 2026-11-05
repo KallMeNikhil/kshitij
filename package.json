@@ -1,0 +1,63 @@
+{
+  "name": "kshitij",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kshitij Sports Meet Portal",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:emulator": "vite --mode emulator",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "typecheck:worker": "npm --prefix worker run typecheck",
+    "typecheck:scripts": "tsc -p scripts/tsconfig.json",
+    "typecheck:all": "npm run typecheck && npm run typecheck:worker && npm run typecheck:scripts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:worker": "npm --prefix worker run test",
+    "test:all": "npm run test && npm run test:worker",
+    "install:all": "npm ci && npm --prefix worker ci",
+    "worker:dev": "npm --prefix worker run dev -- --env local",
+    "worker:build": "cd worker && npm run typecheck && npx wrangler deploy --dry-run",
+    "emulators": "cd firebase && firebase emulators:start --project demo-kshitij",
+    "emulators:persist": "cd firebase && firebase emulators:start --project demo-kshitij --export-on-exit=./emulator-data",
+    "emulators:restore": "cd firebase && firebase emulators:start --project demo-kshitij --import=./emulator-data --export-on-exit=./emulator-data",
+    "seed:emulator": "tsx scripts/seed-demo-data.ts",
+    "deploy:rules": "cd firebase && firebase deploy --only firestore:rules,firestore:indexes",
+    "deploy:hosting": "npm run build && node -e \"require('fs').rmSync('firebase/dist',{recursive:true,force:true}); require('fs').cpSync('dist','firebase/dist',{recursive:true})\" && cd firebase && firebase deploy --only hosting",
+    "deploy:worker": "npm --prefix worker run deploy",
+    "test:rules": "cd firebase && firebase emulators:exec --only firestore --project demo-kshitij-rules \"cd .. && vitest run shared/firestoreRules.emulator.test.ts\""
+  },
+  "dependencies": {
+    "firebase": "^12.19.0",
+    "framer-motion": "^11.18.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "firebase-admin": "^14.4.0",
+    "firebase-tools": "^15.30.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1",
+    "wrangler": "^4.149.0"
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.3": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@7.6.6": true,
+    "re2@1.26.1": true,
+    "workerd@1.20261006.1": true
+  }
+}

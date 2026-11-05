@@ -1,0 +1,23 @@
+name = "kshitij-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-09"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "MEDIA"
+id = "098ab6d004644147be604a360ba1a933"
+
+[vars]
+FIREBASE_PROJECT_ID = "kshitij-87302"
+ALLOWED_ORIGIN = "https://kshitij-87302.web.app,https://kshitij-87302.firebaseapp.com,https://kshitij.whynikhil.xyz"
+
+[env.local]
+[env.local.vars]
+FIREBASE_PROJECT_ID = "demo-kshitij"
+ALLOWED_ORIGIN = "http://127.0.0.1:5173"
+FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080"
+FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:9099"
+
+[[env.local.kv_namespaces]]
+binding = "MEDIA"
+id = "kshitij-media-local"

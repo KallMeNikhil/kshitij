@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "fixtures",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "competitionId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "admins",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "role", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

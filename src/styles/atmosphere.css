@@ -1,0 +1,127 @@
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-atmosphere);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.atmosphere__lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: var(--atmos-lines-opacity);
+}
+
+.atmosphere::before,
+.atmosphere::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: var(--atmos-orb-opacity);
+  will-change: transform;
+}
+
+.atmosphere::before {
+  width: min(70vw, 820px);
+  height: min(70vw, 820px);
+  top: -18%;
+  left: -14%;
+  background: radial-gradient(circle, rgba(60, 190, 255, 0.55), rgba(60, 190, 255, 0) 68%);
+  animation: atmos-drift-a 26s ease-in-out infinite alternate;
+}
+
+.atmosphere::after {
+  width: min(75vw, 900px);
+  height: min(75vw, 900px);
+  right: -20%;
+  top: 28%;
+  background: radial-gradient(circle, rgba(130, 100, 255, 0.5), rgba(130, 100, 255, 0) 68%);
+  animation: atmos-drift-b 32s ease-in-out infinite alternate;
+}
+
+.atmosphere__glow {
+  position: absolute;
+  width: min(80vw, 980px);
+  height: min(55vw, 640px);
+  left: 10%;
+  bottom: -22%;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: var(--atmos-orb-opacity);
+  background: radial-gradient(ellipse, rgba(30, 220, 180, 0.34), rgba(30, 220, 180, 0) 70%);
+  animation: atmos-drift-a 38s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes atmos-drift-a {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(7vw, 6vh, 0) scale(1.12); }
+}
+
+@keyframes atmos-drift-b {
+  from { transform: translate3d(0, 0, 0) scale(1.05); }
+  to { transform: translate3d(-8vw, -6vh, 0) scale(0.94); }
+}
+
+@media (max-width: 719px) {
+  .atmosphere::before,
+  .atmosphere::after,
+  .atmosphere__glow {
+    filter: blur(50px);
+  }
+}
+
+.atmosphere__lines line,
+.atmosphere__lines path {
+  stroke: var(--color-text);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.atmosphere__grain {
+  position: absolute;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  background-repeat: repeat;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+}
+
+.pane-seam {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-hairline) 20%, var(--color-hairline) 80%, transparent);
+  border: none;
+  margin: 0;
+}
+
+.sport-atmosphere {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.1;
+}
+
+.sport-atmosphere svg {
+  width: 100%;
+  height: 100%;
+}
+
+.sport-atmosphere g {
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atmosphere::before,
+  .atmosphere::after,
+  .atmosphere__glow {
+    animation: none;
+  }
+  .sport-atmosphere {
+    opacity: 0.07;
+  }
+}

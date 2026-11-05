@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>KSHITIJ</title>
+    <meta name="description" content="Fixtures, live scores and results." />
+    <meta name="theme-color" content="#0a0b0d" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="apple-mobile-web-app-title" content="KSHITIJ" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html { background: #0a0b0d; }
+      html[data-theme="bright"] { background: #0f1c3d; }
+      .boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: radial-gradient(ellipse 46% 38% at 50% 50%, rgba(76, 194, 255, 0.16), transparent 72%); }
+      .boot__mark { position: relative; font: 400 clamp(2rem, 9vw, 3.4rem) "Bebas Neue", Impact, sans-serif; letter-spacing: 0.22em; color: #e8f6ff; text-indent: 0.22em; }
+      .boot__mark::after { content: ""; position: absolute; left: 0; right: 0; bottom: -10px; height: 2px; background: linear-gradient(90deg, transparent, #4cc2ff, transparent); transform: scaleX(0.2); opacity: 0.4; animation: boot-sweep 1.6s ease-in-out infinite; }
+      @keyframes boot-sweep { 50% { transform: scaleX(1); opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .boot__mark::after { animation: none; transform: scaleX(0.6); opacity: 0.8; } }
+      html[data-intro="playing"] .boot__mark { visibility: hidden; }
+    </style>
+    <script>
+      try { document.documentElement.dataset.theme = localStorage.getItem("kshitij-theme") === "bright" ? "bright" : "classic"; } catch (e) { document.documentElement.dataset.theme = "classic"; }
+    </script>
+    <script>
+      try {
+        var d = document.documentElement;
+        if (location.pathname === "/" && !location.hash && !sessionStorage.getItem("kshitij-intro-seen") && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          d.setAttribute("data-intro", "playing");
+          setTimeout(function () { d.removeAttribute("data-intro"); }, 7000);
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"><div class="boot" aria-hidden="true"><span class="boot__mark">KSHITIJ</span></div></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
